@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     'apps.chat',
     'apps.knowledge',
     'apps.prompt',
+    'apps.debate',
 ]
 
 MIDDLEWARE = [
