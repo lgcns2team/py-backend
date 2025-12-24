@@ -25,7 +25,7 @@ def recommend_debate_topics(request):
                 content_type='text/event-stream'
             )
         
-        # ✅ 환경변수에서 Prompt ID 가져오기
+        # 환경변수에서 Prompt ARN 가져오기
         prompt_arn = os.getenv('AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN')
         
         if not prompt_arn:
@@ -37,13 +37,11 @@ def recommend_debate_topics(request):
         logger.info(f"Debate topics request - Query: {user_query[:50]}...")
         logger.info(f"Using Prompt ARN: {prompt_arn}")
         
-        # Bedrock Agent 클라이언트
         bedrock_agent = boto3.client(
             service_name='bedrock-agent',
-            region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
+            region_name=os.getenv('AWS_REGION', 'ap-northeast-2')
         )
         
-        # Prompt 가져오기
         prompt_response = bedrock_agent.get_prompt(
             promptIdentifier=prompt_arn
         )
@@ -58,9 +56,7 @@ def recommend_debate_topics(request):
         template_type = variant.get('templateType', 'TEXT')
         model_id = prompt_response.get('defaultModelId', 'anthropic.claude-3-5-sonnet-20240620-v1:0')
         
-        prompt_variables = {
-            "user_query": user_query
-        }
+        prompt_variables = {"user_query": user_query}
         
         bedrock_runtime = BedrockClients.get_runtime()
         
@@ -79,12 +75,7 @@ def recommend_debate_topics(request):
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": inference_config.get('maxTokens', 4096),
                 "temperature": inference_config.get('temperature', 1.0),
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": formatted_prompt
-                    }
-                ]
+                "messages": [{"role": "user", "content": formatted_prompt}]
             }
             
             if 'stopSequences' in inference_config:
@@ -100,10 +91,86 @@ def recommend_debate_topics(request):
                 content_type='text/event-stream'
             )
         
-        # CHAT 템플릿 처리 (필요시)
+        # ✅ CHAT 템플릿 처리 추가
         elif template_type == 'CHAT':
-            # ... (prompt/views.py의 CHAT 로직 복사)
-            pass
+            template_config = variant.get('templateConfiguration', {})
+            chat_config = template_config.get('chat', {})
+            messages = chat_config.get('messages', [])
+            system_prompts = chat_config.get('system', [])
+            
+            logger.info(f"CHAT template - Messages: {len(messages)}, System prompts: {len(system_prompts)}")
+            
+            inference_config = variant.get('inferenceConfiguration', {})
+            
+            # 메시지 포맷팅
+            formatted_messages = []
+            for msg in messages:
+                role = msg.get('role', 'user')
+                content_blocks = msg.get('content', [])
+                
+                formatted_content = []
+                for block in content_blocks:
+                    if 'text' in block:
+                        text = block['text']
+                        # 변수 치환
+                        for var_name, var_value in prompt_variables.items():
+                            text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                        if text.strip():
+                            formatted_content.append({"type": "text", "text": text})
+                
+                if formatted_content:
+                    content_text = " ".join([c['text'] for c in formatted_content if 'text' in c])
+                    if content_text.strip():
+                        formatted_messages.append({
+                            "role": role,
+                            "content": content_text
+                        })
+            
+            # user 메시지가 없거나 마지막이 user가 아니면 추가
+            if not formatted_messages or formatted_messages[-1].get('role') != 'user':
+                formatted_messages.append({
+                    "role": "user",
+                    "content": user_query
+                })
+            elif formatted_messages and not formatted_messages[0].get('content', '').strip():
+                formatted_messages[0]['content'] = user_query
+            
+            logger.info(f"Formatted {len(formatted_messages)} messages")
+            
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": inference_config.get('maxTokens', 4096),
+                "temperature": inference_config.get('temperature', 1.0),
+                "messages": formatted_messages
+            }
+            
+            # System prompt 처리
+            if system_prompts:
+                system_text = []
+                for sys_prompt in system_prompts:
+                    if 'text' in sys_prompt:
+                        text = sys_prompt['text']
+                        for var_name, var_value in prompt_variables.items():
+                            text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                        system_text.append(text)
+                
+                if system_text:
+                    body['system'] = " ".join(system_text)
+            
+            if 'stopSequences' in inference_config:
+                body['stop_sequences'] = inference_config['stopSequences']
+            
+            logger.info(f"Invoking model: {model_id}")
+            
+            response = bedrock_runtime.invoke_model_with_response_stream(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+            
+            return StreamingHttpResponse(
+                stream_debate_response_buffered(response),
+                content_type='text/event-stream'
+            )
         
         else:
             raise ValueError(f"Unsupported template type: {template_type}")
@@ -118,7 +185,7 @@ def recommend_debate_topics(request):
         )
 
 def stream_debate_response(response):
-    """토픽 추천 스트리밍 응답"""
+    """TEXT 템플릿 스트리밍 응답"""
     full_text = ""
     
     try:
@@ -130,10 +197,44 @@ def stream_debate_response(response):
                 if text:
                     full_text += text
                     yield sse_event({'type': 'content', 'text': text})
-                    logger.info(f"Sent text chunk: {text[:30]}...")
             
             elif chunk['type'] == 'message_stop':
                 logger.info(f"Message stop received")
+        
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}")
+        yield sse_event({'type': 'error', 'message': str(e)})
+
+def stream_debate_response_buffered(response):
+    """CHAT 템플릿 스트리밍 응답 (버퍼링)"""
+    full_text = ""
+    buffer = ""
+    buffer_size = 10
+    
+    try:
+        for event in response['body']:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
+                    buffer += text
+                    if len(buffer) >= buffer_size:
+                        yield sse_event({'type': 'content', 'text': buffer})
+                        logger.info(f"Sent text chunk: {buffer[:30]}...")
+                        buffer = ""
+            
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+        
+        # 남은 버퍼 전송
+        if buffer:
+            yield sse_event({'type': 'content', 'text': buffer})
+            logger.info(f"Sent final buffer: {buffer[:30]}...")
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
