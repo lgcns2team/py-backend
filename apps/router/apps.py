@@ -1,0 +1,7 @@
+from django.apps import AppConfig
+
+
+class RouterConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.router'
+    verbose_name = 'Smart Chat Router'

@@ -20,7 +20,10 @@ INSTALLED_APPS = [
     'apps.knowledge',
     'apps.prompt',
     'apps.debate',
+    'apps.router',
+    'apps.tools',
 ]
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

@@ -20,8 +20,8 @@ urlpatterns = [
     path('', root_view),
     path('health', health_check),
     
-    # /chat → apps.knowledge (일반 AI 채팅)
-    path('chat', include('apps.knowledge.urls')),
+    # /agent-chat → apps.router (Tool Calling + KB 라우터)
+    path('agent-chat', include('apps.router.urls')),
     
     # /debate/topics/recommend → apps.debate (토픽 추천 전용)
     path('debate/topics/recommend', include('apps.debate.urls')),
