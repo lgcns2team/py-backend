@@ -34,7 +34,7 @@ TOOL_NAVIGATE_TO_PERSON = "navigate_to_person"
 ROUTER_SYSTEM_PROMPT = """당신은 역사 교과서 AI 도우미입니다.
 
 사용자가 다음과 같은 요청을 하면 반드시 navigate_to_person 도구를 사용하세요:
-- "XXX한테 말걸어줘", "XXX와 대화하고 싶어", "XXX에게 문자 보내줘"
+- "XXX한테 말걸어줘", "XXX와 대화하고 싶어", "XXX에게 문자 보내줘", "XXX와 채팅 시작해줘"
 - "XXX랑 얘기하고 싶어", "XXX한테 연락해줘"
 - 특정 역사 인물과 직접 대화를 원하는 경우
 
