@@ -59,10 +59,22 @@ def agent_chat_view(request):
         
         # 2단계: 라우팅
         if result['type'] == 'tool_call':
-            # Tool 호출됨 - 즉시 JSON 반환
-            logger.info(f"Tool Call 감지: {result['action']}")
-            tool_response = handle_tool_result(result['action'], result['input'])
+            action = result['action']
+            tool_input = result['input']
+            
+            logger.info(f"Tool Call 감지: {action}")
+
+            # [CASE A] 전쟁 툴인 경우 -> 스트리밍 (Tool + KB 답변)
+            if action == "navigate_to_war":
+                return StreamingHttpResponse(
+                    stream_war_navigation_and_kb(query, tool_input),
+                    content_type='text/event-stream'
+                )
+
+            # [CASE B] 일반 툴인 경우 -> JSON 응답
+            tool_response = handle_tool_result(action, tool_input)
             return JsonResponse(tool_response)
+
         else:
             # 일반 질문 - Knowledge Base 검색으로 Fallback
             logger.info("Knowledge Base 검색으로 Fallback")
@@ -147,4 +159,47 @@ def stream_kb_response(response):
         
     except Exception as e:
         logger.error(f"스트리밍 오류: {str(e)}")
+        yield sse_event({'type': 'error', 'message': str(e)})
+
+
+def stream_war_navigation_and_kb(query, tool_params):
+    """
+    1. 툴 호출 이벤트 전송 (navigate_to_war)
+    2. KB 검색 결과 스트리밍 전송
+    """
+    # 1. Tool Call 먼저 전송 (프론트엔드가 지도 이동 시작)
+    yield sse_event({
+        "type": "tool_call",
+        "tool_name": "navigate_to_war",
+        "parameters": {
+            "year": tool_params.get('year'),
+            "war_name": tool_params.get('war_name')
+        }
+    })
+
+    # 2. KB 검색 시작 (사용자 질문으로 답변 생성)
+    # 기존 knowledge_base_streaming_response 로직 재사용
+    try:
+        kb_id = os.getenv('AWS_BEDROCK_KB_ID')
+        model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
+        
+        bedrock_agent_runtime = BedrockClients.get_agent_runtime()
+        response = bedrock_agent_runtime.retrieve_and_generate_stream(
+            input={'text': query},
+            retrieveAndGenerateConfiguration={
+                'type': 'KNOWLEDGE_BASE',
+                'knowledgeBaseConfiguration': {
+                    'knowledgeBaseId': kb_id,
+                    'modelArn': model_arn
+                }
+            }
+        )
+        
+        # KB 응답 스트리밍 (stream_kb_response 재사용)
+        # 주의: stream_kb_response는 'done' 이벤트를 마지막에 보내므로, 
+        # 여기서는 그대로 yield from 해도 됩니다.
+        yield from stream_kb_response(response)
+        
+    except Exception as e:
+        logger.error(f"KB Stream Error: {e}")
         yield sse_event({'type': 'error', 'message': str(e)})

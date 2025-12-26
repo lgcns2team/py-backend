@@ -13,26 +13,20 @@ logger = logging.getLogger(__name__)
 @csrf_exempt
 @require_http_methods(["POST"])
 def recommend_debate_topics(request):
-    """토픽 추천 전용 엔드포인트"""
+    """토픽 추천 전용 엔드포인트 - JSON 응답"""
     try:
         data = json.loads(request.body)
         
         user_query = data.get('user_query')
         
         if not user_query:
-            return JsonResponse({
-                'type': 'error',
-                'message': 'Missing user_query'
-            }, status=400)
+            return JsonResponse({'error': 'Missing user_query'}, status=400)
         
         # 환경변수에서 Prompt ARN 가져오기
         prompt_arn = os.getenv('AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN')
         
         if not prompt_arn:
-            return JsonResponse({
-                'type': 'error',
-                'message': 'AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'
-            }, status=500)
+            return JsonResponse({'error': 'AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'}, status=500)
         
         logger.info(f"Debate topics request - Query: {user_query[:50]}...")
         logger.info(f"Using Prompt ARN: {prompt_arn}")
@@ -84,7 +78,18 @@ def recommend_debate_topics(request):
             if 'stopSequences' in inference_config:
                 body['stop_sequences'] = inference_config['stopSequences']
             
-        # CHAT 템플릿 처리
+            # 동기 호출로 전체 응답 받기
+            response = bedrock_runtime.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+            
+            result = json.loads(response['body'].read())
+            full_text = result['content'][0]['text']
+            
+            return parse_and_return_topics(full_text)
+        
+        # ✅ CHAT 템플릿 처리 추가
         elif template_type == 'CHAT':
             template_config = variant.get('templateConfiguration', {})
             chat_config = template_config.get('chat', {})
@@ -148,6 +153,18 @@ def recommend_debate_topics(request):
             
             if 'stopSequences' in inference_config:
                 body['stop_sequences'] = inference_config['stopSequences']
+            
+            logger.info(f"Invoking model: {model_id}")
+            
+            response = bedrock_runtime.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+            
+            result = json.loads(response['body'].read())
+            full_text = result['content'][0]['text']
+            
+            return parse_and_return_topics(full_text)
         
         else:
             raise ValueError(f"Unsupported template type: {template_type}")
@@ -197,7 +214,114 @@ def recommend_debate_topics(request):
         logger.error(f"Debate topics error: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+def parse_and_return_topics(full_text: str):
+    """
+    LLM 응답 텍스트에서 토픽을 파싱하여 JSON 반환
+    """
+    import re
+    
+    try:
+        # JSON 블록 추출 시도
+        json_match = re.search(r'\[.*\]', full_text, re.DOTALL)
+        if json_match:
+            topics_data = json.loads(json_match.group())
+            return JsonResponse({'debate_topics': topics_data})
+        
+        # JSON 없으면 텍스트 파싱
+        topics = []
+        lines = full_text.strip().split('\n')
+        current_topic = {}
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # 번호로 시작하는 라인 (1. 토픽명)
+            if re.match(r'^\d+\.\s*', line):
+                if current_topic:
+                    topics.append(current_topic)
+                topic_text = re.sub(r'^\d+\.\s*', '', line)
+                current_topic = {'topic': topic_text, 'description': ''}
+            elif current_topic:
+                current_topic['description'] += ' ' + line
+        
+        if current_topic:
+            topics.append(current_topic)
+        
+        # Clean up descriptions
+        for topic in topics:
+            topic['description'] = topic['description'].strip()
+        
+        return JsonResponse({'debate_topics': topics})
+        
+    except Exception as e:
+        logger.error(f"Parse error: {str(e)}")
+        # 파싱 실패 시 원본 텍스트 반환
         return JsonResponse({
-            'type': 'error',
-            'message': str(e)
-        }, status=500)
+            'debate_topics': [{
+                'topic': '토픽 생성됨',
+                'description': full_text[:500]
+            }]
+        })
+
+def stream_debate_response(response):
+    """TEXT 템플릿 스트리밍 응답"""
+    full_text = ""
+    
+    try:
+        for event in response['body']:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
+                    yield sse_event({'type': 'content', 'text': text})
+            
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+        
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}")
+        yield sse_event({'type': 'error', 'message': str(e)})
+
+def stream_debate_response_buffered(response):
+    """CHAT 템플릿 스트리밍 응답 (버퍼링)"""
+    full_text = ""
+    buffer = ""
+    buffer_size = 10
+    
+    try:
+        for event in response['body']:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
+                    buffer += text
+                    if len(buffer) >= buffer_size:
+                        yield sse_event({'type': 'content', 'text': buffer})
+                        logger.info(f"Sent text chunk: {buffer[:30]}...")
+                        buffer = ""
+            
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+        
+        # 남은 버퍼 전송
+        if buffer:
+            yield sse_event({'type': 'content', 'text': buffer})
+            logger.info(f"Sent final buffer: {buffer[:30]}...")
+        
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}")
+        yield sse_event({'type': 'error', 'message': str(e)})
