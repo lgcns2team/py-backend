@@ -8,7 +8,14 @@ from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
+# from apps.prompt.redis_repo import RedisChatRepository, MessageDTO
+from uuid import UUID
+from apps.prompt.redis_chat_repository import RedisChatRepository
+from apps.prompt.dto import MessageDTO
+
 logger = logging.getLogger(__name__)
+
+from apps.prompt.models import AIPerson
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -21,16 +28,72 @@ def prompt_view(request, promptId=None):
         prompt_id = promptId or data.get('prompt_id')
         user_query = data.get('message') or data.get('user_query')
         
+        user_id = request.GET.get("userId")
+
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
                 [sse_event({'type': 'error', 'message': 'Missing prompt_id or message'})],
                 content_type='text/event-stream'
             )
         
+        if not user_id:
+            return StreamingHttpResponse(
+                [sse_event({"type": "error", "message": "Missing userId in query param"})],
+                content_type="text/event-stream",
+            )
+        
+        try:
+            user_id = UUID(user_id)
+        except ValueError:
+            return StreamingHttpResponse(
+                [sse_event({'type': 'error', 'message': 'Invalid userId'})],
+                content_type='text/event-stream'
+            )
+
+        redis_repo = RedisChatRepository()
+        history_key = redis_repo.build_aiperson_key(prompt_id, user_id)
+
+        user_msg = MessageDTO.user(user_query)
+
+        def on_done_save(full_response: str):
+            try:
+                assistant_msg = MessageDTO.assistant(full_response)
+                redis_repo.append_message(history_key, user_msg)
+                redis_repo.append_message(history_key, assistant_msg)
+                logger.info("Saved chat history key=%s (user_len=%s, assistant_len=%s)",
+                            history_key, len(user_query), len(full_response))
+            except Exception as e:
+                logger.error("Redis save failed: %s", str(e))
+    
+        try:
+            ai_person = AIPerson.objects.get(promptId=prompt_id)
+            logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
+
+            person_variables = {
+                'name': ai_person.name,
+                'era': ai_person.era,
+                'summary': ai_person.summary or '',
+                'year': str(ai_person.year) if ai_person.year else '',
+                'greeting_message': ai_person.greetingMessage or '',
+                'ex_question': ai_person.exQuestion or '',
+            }
+
+            if ai_person.latitude is not None and ai_person.longitude is not None:
+                person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
+
+        except AIPerson.DoesNotExist:
+            logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
+            person_variables = {}
+
         variables = data.get('variables', {})
-        
-        logger.info(f"Prompt request - Prompt ID: {prompt_id}, Query: {user_query[:50]}...")
-        
+        prompt_variables = {
+            "user_query": user_query,
+            **person_variables,  # AI 인물 정보
+            **variables
+        }
+
+        logger.info(f"Prompt variables: {list(prompt_variables.keys())}")
+
         # Bedrock Agent 클라이언트
         bedrock_agent = boto3.client(
             service_name='bedrock-agent',
@@ -42,7 +105,8 @@ def prompt_view(request, promptId=None):
             prompt_identifier = prompt_id
         else:
             # ✅ 버전 없이 ARN 구성
-            prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/{prompt_id}"
+            # prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/{prompt_id}"
+            prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/VJQKBMTQM2"
         
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
@@ -64,11 +128,6 @@ def prompt_view(request, promptId=None):
             logger.info(f"Template type: {template_type}")
             
             model_id = prompt_response.get('defaultModelId', 'anthropic.claude-3-5-sonnet-20240620-v1:0')
-            
-            prompt_variables = {
-                "user_query": user_query,
-                **variables
-            }
             
             # Bedrock Runtime
             bedrock_runtime = BedrockClients.get_runtime()
@@ -110,7 +169,7 @@ def prompt_view(request, promptId=None):
                 )
                 
                 return StreamingHttpResponse(
-                    stream_text_prompt_response(response),
+                    stream_text_prompt_response(response, on_done=on_done_save),
                     content_type='text/event-stream'
                 )
             
@@ -189,7 +248,7 @@ def prompt_view(request, promptId=None):
                 )
                 
                 return StreamingHttpResponse(
-                    stream_chat_prompt_response(response),
+                    stream_chat_prompt_response(response, on_done=on_done_save),
                     content_type='text/event-stream'
                 )
             
@@ -213,7 +272,7 @@ def prompt_view(request, promptId=None):
             content_type='text/event-stream'
         )
 
-def stream_text_prompt_response(response):
+def stream_text_prompt_response(response, on_done=None):
     """TEXT 템플릿 스트리밍 응답"""
     full_text = ""
     
@@ -232,13 +291,17 @@ def stream_text_prompt_response(response):
                 logger.info(f"Message stop received")
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        
+        if callable(on_done):
+            on_done(full_text)
+        
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
 
-def stream_chat_prompt_response(response):
+def stream_chat_prompt_response(response, on_done=None):
     """CHAT 템플릿 스트리밍 응답 (버퍼링)"""
     full_text = ""
     buffer = ""
@@ -267,6 +330,10 @@ def stream_chat_prompt_response(response):
             logger.info(f"Sent final buffer: {buffer[:30]}...")
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        
+        if callable(on_done):
+            on_done(full_text)
+        
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
