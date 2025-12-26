@@ -19,7 +19,9 @@ CHARACTER_MAP = {
 }
 
 
-def get_character_info(person_name: str) -> dict | None:
+from typing import Optional
+
+def get_character_info(person_name: str) -> Optional[dict]:
     """
     캐릭터 이름으로 정보 조회
     
