@@ -25,9 +25,13 @@ urlpatterns = [
     # 1. tts(speak) 주소를 promptId 변수가 없는 경로로 따로 등록
     path('api/prompt/speak/', prompt_views.tts_view, name='tts_view'),
     
+
+    # /api/ai-person/... → apps.prompt (AI 인물)
+    # api/ 지우고 apps.prompt 로 이동 필요
+     path('api/', include('apps.prompt.urls')),
     
-    # /api/agent-chat → apps.router (Tool Calling + KB 라우터)
-    path('api/agent-chat', include('apps.router.urls')),
+    # /api/ai/chat → apps.knowledge (일반 AI 채팅)
+    path('chat', include('apps.knowledge.urls')),
     
     # /api/debate/topics/recommend → apps.debate (토픽 추천 전용)
     path('api/debate/topics/recommend', include('apps.debate.urls')),
@@ -43,4 +47,6 @@ urlpatterns = [
     
     # 아까 만든 chat 앱의 URL도 포함되어 있는지 확인하세요
     path('api/chat/', include('apps.chat.urls')),
+    # /debate/topics/recommend → apps.debate (토픽 추천 전용)
+    path('debate/topics/recommend', include('apps.debate.urls')),
 ]

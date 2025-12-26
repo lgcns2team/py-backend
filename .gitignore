@@ -1,3 +1,14 @@
+venv/
+env/
+.venv/
+
 .env
+
 **/__pycache__/
+*.py[cod]
+*$py.class
+
+media/tts/
 *.mp3
+
+db.sqlite3

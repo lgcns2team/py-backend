@@ -26,7 +26,6 @@ INSTALLED_APPS = [
     'drf_spectacular',
 ]
 
-
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -55,8 +54,8 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Database
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # 'ENGINE': 'django.db.backends.sqlite3',
+        # 'NAME': BASE_DIR / 'db.sqlite3',
         # 'ENGINE': 'django.db.backends.postgresql',
         # 'NAME': os.getenv('DB_NAME', 'ai_db'),
         # 'USER': os.getenv('DB_USER', 'postgres'),
@@ -64,6 +63,15 @@ DATABASES = {
         # 'HOST': os.getenv('DB_HOST', 'localhost'),
         # 'PORT': os.getenv('DB_PORT', '5432'),
         
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'HAI'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'root'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
+         'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
     }
 }
 
