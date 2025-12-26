@@ -8,7 +8,15 @@ from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
+
+# apps/prompt/views.py 상단에 추가
+from drf_spectacular.utils import extend_schema, OpenApiTypes
+from rest_framework.decorators import api_view
+from rest_framework import serializers
+from django.http import JsonResponse, FileResponse
+from apps.tools.tts import generate_tts_file
 logger = logging.getLogger(__name__)
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -272,3 +280,42 @@ def stream_chat_prompt_response(response):
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+        
+        
+# TTS
+class TTSSerializer(serializers.Serializer):
+    text = serializers.CharField(help_text="음성으로 변환할 텍스트를 입력하세요.")     
+    
+      
+@extend_schema(
+    summary="TTS 음성 생성",
+    request=TTSSerializer,
+    description="텍스트를 입력받아 MP3 음성 파일을 반환합니다.",
+    responses={200: OpenApiTypes.BINARY},
+    parameters=[]
+)   
+@csrf_exempt
+@api_view(["POST"]) # 보통 긴 텍스트가 올 수 있으므로 POST를 추천합니다
+def tts_view(request, promptId=None):
+    """텍스트를 음성으로 변환하여 반환"""
+    try:
+        # data = json.loads(request.body)
+        text = request.data.get('text', '')
+        
+        if not text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
+        # 1. TTS 파일 생성 (tools/tts.py의 함수 호출)
+        # 파일명을 유니크하게 만들기 위해 임시로 'speech.mp3' 사용
+        file_path = generate_tts_file(text)
+        
+        # 2. 파일 응답 전송
+        # 전송 후 파일을 삭제하고 싶다면 별도의 처리가 필요하지만, 
+        # 우선은 작동 확인을 위해 바로 보냅니다.
+        response = FileResponse(open(file_path, 'rb'), content_type='audio/mpeg')
+        response['Content-Disposition'] = 'attachment; filename="tts_sample.mp3"'
+        return response
+
+    except Exception as e:
+        logger.error(f"TTS error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
