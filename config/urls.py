@@ -20,12 +20,12 @@ urlpatterns = [
     path('', root_view),
     path('health', health_check),
     
-    # /chat → apps.knowledge (일반 AI 채팅)
-    path('chat', include('apps.knowledge.urls')),
+    # /api/agent-chat → apps.router (Tool Calling + KB 라우터)
+    path('api/agent-chat', include('apps.router.urls')),
     
-    # /debate/topics/recommend → apps.debate (토픽 추천 전용)
-    path('debate/topics/recommend', include('apps.debate.urls')),
+    # /api/debate/topics/recommend → apps.debate (토픽 추천 전용)
+    path('api/debate/topics/recommend', include('apps.debate.urls')),
     
-    # /ai-person/{promptId}/chat → apps.prompt (캐릭터 채팅)
-    re_path(r'^ai-person/(?P<promptId>[^/]+)/chat$', include('apps.prompt.urls')),
+    # /api/ai-person/{promptId}/chat → apps.prompt (캐릭터 채팅)
+    re_path(r'^api/ai-person/(?P<promptId>[^/]+)/chat$', include('apps.prompt.urls')),
 ]

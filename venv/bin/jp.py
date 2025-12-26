@@ -1,4 +1,4 @@
-#!/Users/hyungjunehong/Documents/history_ai/aibackend/venv/bin/python3
+#!/Users/sung0/Desktop/Hai_project.ai/py-backend/venv/bin/python3.11
 
 import sys
 import json
