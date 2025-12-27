@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import boto3
-from django.http import StreamingHttpResponse
+from django.http import StreamingHttpResponse, JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
@@ -42,108 +42,6 @@ def build_debate_messages_json_lines(messages):
 
     return "\n".join(lines), used_count
 
-
-def invoke_bedrock_prompt_stream(prompt_arn: str, prompt_variables: dict):
-    # Bedrock Prompt를 get_prompt로 불러온 다음
-    # TEXT/CHAT 템플릿에 맞춰 변수를 치환하고
-    # invoke_model_with_response_stream로 스트리밍 응답을 생성
-    bedrock_agent = boto3.client(
-        service_name="bedrock-agent",
-        region_name=os.getenv("AWS_REGION", "ap-northeast-2")
-    )
-    bedrock_runtime = BedrockClients.get_runtime()
-
-    prompt_response = bedrock_agent.get_prompt(promptIdentifier=prompt_arn)
-    logger.info(f"Prompt retrieved: {prompt_response.get('name', 'Unknown')}")
-
-    variants = prompt_response.get("variants", [])
-    if not variants:
-        raise ValueError("Prompt has no variants")
-
-    variant = variants[0]
-    template_type = variant.get("templateType", "TEXT")
-    model_id = prompt_response.get("defaultModelId", "anthropic.claude-3-5-sonnet-20240620-v1:0")
-    inference_config = variant.get("inferenceConfiguration", {})
-
-    logger.info(f"Template type: {template_type}")
-    logger.info(f"Invoking model: {model_id}")
-    logger.info(f"Prompt variables keys: {list(prompt_variables.keys())}")
-
-    # TEXT 템플릿
-    if template_type == "TEXT":
-        template_text = variant.get("templateConfiguration", {}).get("text", {}).get("text", "")
-        formatted_prompt = template_text
-        for var_name, var_value in prompt_variables.items():
-            formatted_prompt = formatted_prompt.replace(f"{{{{{var_name}}}}}", str(var_value))
-
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": inference_config.get("maxTokens", 4096),
-            "temperature": inference_config.get("temperature", 1.0),
-            "messages": [{"role": "user", "content": formatted_prompt}],
-        }
-        if "stopSequences" in inference_config:
-            body["stop_sequences"] = inference_config["stopSequences"]
-
-        response = bedrock_runtime.invoke_model_with_response_stream(
-            modelId=model_id,
-            body=json.dumps(body)
-        )
-        return response
-    elif template_type == "CHAT":
-        chat_config = variant.get("templateConfiguration", {}).get("chat", {})
-        messages = chat_config.get("messages", [])
-        system_prompts = chat_config.get("system", [])
-
-        formatted_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content_blocks = msg.get("content", [])
-            text_parts = []
-
-            for block in content_blocks:
-                if "text" in block:
-                    text = block["text"]
-                    for var_name, var_value in prompt_variables.items():
-                        text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
-                    if text.strip():
-                        text_parts.append(text)
-
-            if text_parts:
-                formatted_messages.append({"role": role, "content": " ".join(text_parts)})
-
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": inference_config.get("maxTokens", 4096),
-            "temperature": inference_config.get("temperature", 1.0),
-            "messages": formatted_messages,
-        }
-
-        # system prompt
-        if system_prompts:
-            system_texts = []
-            for sys_prompt in system_prompts:
-                if "text" in sys_prompt:
-                    text = sys_prompt["text"]
-                    for var_name, var_value in prompt_variables.items():
-                        text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
-                    if text.strip():
-                        system_texts.append(text)
-            if system_texts:
-                body["system"] = " ".join(system_texts)
-
-        if "stopSequences" in inference_config:
-            body["stop_sequences"] = inference_config["stopSequences"]
-
-        response = bedrock_runtime.invoke_model_with_response_stream(
-            modelId=model_id,
-            body=json.dumps(body)
-        )
-        return response
-
-    else:
-        raise ValueError(f"Unsupported template type: {template_type}")
-    
 @csrf_exempt
 @require_http_methods(["POST"])
 def debate_summary(request, room_id: str):
@@ -186,15 +84,31 @@ def debate_summary(request, room_id: str):
         }
 
         logger.info(f"[DebateSummary] room={room_id} topic={topic} used_count={used_count}")
-        logger.debug(f"[DebateSummary] debate_messages preview={debate_messages_str[:300]}...")
+        text = invoke_bedrock_prompt(prompt_arn, prompt_variables)
 
-        # Bedrock 스트리밍 호출
-        response = invoke_bedrock_prompt_stream(prompt_arn, prompt_variables)
-
-        return StreamingHttpResponse(
-            stream_debate_response_buffered(response),
-            content_type="text/event-stream"
-        )
+        try:
+            parsed = json.loads(text)
+            return JsonResponse(
+                {
+                    "room_id": room_id,
+                    "topic": topic,
+                    "used_message_count": used_count,
+                    "result": parsed,
+                },
+                json_dumps_params={"ensure_ascii": False},
+                status=200,
+            )
+        except Exception:
+            return JsonResponse(
+                {
+                    "room_id": room_id,
+                    "topic": topic,
+                    "used_message_count": used_count,
+                    "text": text,
+                },
+                json_dumps_params={"ensure_ascii": False},
+                status=200,
+            )
 
     except Exception as e:
         logger.error(f"Debate summary error: {str(e)}", exc_info=True)
@@ -435,3 +349,108 @@ def stream_debate_response_buffered(response):
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+
+def invoke_bedrock_prompt(prompt_arn: str, prompt_variables: dict) -> str:
+    
+    bedrock_agent = boto3.client(
+        service_name="bedrock-agent",
+        region_name=os.getenv("AWS_REGION", "ap-northeast-2")
+    )
+    bedrock_runtime = BedrockClients.get_runtime()
+
+    prompt_response = bedrock_agent.get_prompt(promptIdentifier=prompt_arn)
+    logger.info(f"Prompt retrieved: {prompt_response.get('name', 'Unknown')}")
+
+    variants = prompt_response.get("variants", [])
+    if not variants:
+        raise ValueError("Prompt has no variants")
+
+    variant = variants[0]
+    template_type = variant.get("templateType", "TEXT")
+    model_id = prompt_response.get("defaultModelId", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+    inference_config = variant.get("inferenceConfiguration", {})
+
+    if template_type == "TEXT":
+        template_text = variant.get("templateConfiguration", {}).get("text", {}).get("text", "")
+        formatted_prompt = template_text
+        for var_name, var_value in prompt_variables.items():
+            formatted_prompt = formatted_prompt.replace(f"{{{{{var_name}}}}}", str(var_value))
+
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": inference_config.get("maxTokens", 4096),
+            "temperature": inference_config.get("temperature", 1.0),
+            "messages": [{"role": "user", "content": formatted_prompt}],
+        }
+        if "stopSequences" in inference_config:
+            body["stop_sequences"] = inference_config["stopSequences"]
+
+    elif template_type == "CHAT":
+        chat_config = variant.get("templateConfiguration", {}).get("chat", {})
+        messages = chat_config.get("messages", [])
+        system_prompts = chat_config.get("system", [])
+
+        formatted_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content_blocks = msg.get("content", [])
+            text_parts = []
+
+            for block in content_blocks:
+                if "text" in block:
+                    text = block["text"]
+                    for var_name, var_value in prompt_variables.items():
+                        text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                    if text.strip():
+                        text_parts.append(text)
+
+            if text_parts:
+                formatted_messages.append({"role": role, "content": " ".join(text_parts)})
+
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": inference_config.get("maxTokens", 4096),
+            "temperature": inference_config.get("temperature", 1.0),
+            "messages": formatted_messages,
+        }
+
+        # system prompt
+        if system_prompts:
+            system_texts = []
+            for sys_prompt in system_prompts:
+                if "text" in sys_prompt:
+                    text = sys_prompt["text"]
+                    for var_name, var_value in prompt_variables.items():
+                        text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                    if text.strip():
+                        system_texts.append(text)
+            if system_texts:
+                body["system"] = " ".join(system_texts)
+
+        if "stopSequences" in inference_config:
+            body["stop_sequences"] = inference_config["stopSequences"]
+
+    else:
+        raise ValueError(f"Unsupported template type: {template_type}")
+
+    resp = bedrock_runtime.invoke_model(
+        modelId=model_id,
+        body=json.dumps(body),
+        accept="application/json",
+        contentType="application/json",
+    )
+
+    raw = resp["body"].read().decode("utf-8")
+    data = json.loads(raw)
+
+    text = ""
+    content = data.get("content")
+    if isinstance(content, list) and content:
+        first = content[0]
+        if isinstance(first, dict):
+            text = first.get("text", "") or ""
+
+    if not text:
+        text = data.get("completion", "") or ""
+
+    return text

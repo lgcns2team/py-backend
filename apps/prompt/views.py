@@ -8,7 +8,6 @@ from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
-# from apps.prompt.redis_repo import RedisChatRepository, MessageDTO
 from uuid import UUID
 from apps.prompt.redis_chat_repository import RedisChatRepository
 from apps.prompt.dto import MessageDTO
@@ -21,6 +20,8 @@ from apps.prompt.models import AIPerson
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+
     try:
         data = json.loads(request.body)
         
@@ -104,9 +105,7 @@ def prompt_view(request, promptId=None):
         if prompt_id.startswith('arn:'):
             prompt_identifier = prompt_id
         else:
-            # ✅ 버전 없이 ARN 구성
-            # prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/{prompt_id}"
-            prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/VJQKBMTQM2"
+            prompt_identifier = env_prompt_arn
         
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
