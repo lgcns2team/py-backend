@@ -20,10 +20,7 @@ INSTALLED_APPS = [
     'apps.knowledge',
     'apps.prompt',
     'apps.debate',
-    'apps.router',
-    'apps.tools',
 ]
-
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -54,11 +51,14 @@ ASGI_APPLICATION = 'config.asgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'ai_db'),
+        'NAME': os.getenv('DB_NAME', 'HAI'),
         'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'root'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
+         'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
     }
 }
 
