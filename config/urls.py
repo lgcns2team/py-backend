@@ -27,6 +27,6 @@ urlpatterns = [
     # /api/ai/chat → apps.knowledge (일반 AI 채팅)
     path('chat', include('apps.knowledge.urls')),
     
-    # /debate/topics/recommend → apps.debate (토픽 추천 전용)
-    path('debate/topics/recommend', include('apps.debate.urls')),
+    # debate 관련 전체 라우팅
+    path('debate/', include('apps.debate.urls')),
 ]

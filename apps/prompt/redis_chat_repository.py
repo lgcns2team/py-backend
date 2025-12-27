@@ -7,20 +7,10 @@ import redis
 from django.conf import settings
 
 from .dto import MessageDTO
+from common.redis.redis_client import get_redis_client
 
 
 DEFAULT_TTL = timedelta(hours=6)
-
-
-def get_redis_client() -> redis.Redis:
-    return redis.Redis(
-        host=getattr(settings, "REDIS_HOST", "localhost"),
-        port=getattr(settings, "REDIS_PORT", 6379),
-        db=getattr(settings, "REDIS_DB", 0),
-        password=getattr(settings, "REDIS_PASSWORD", None),
-        decode_responses=True,   # 문자열(JSON)로 다루기 편함
-    )
-
 
 class RedisChatRepository:
     def __init__(self):
