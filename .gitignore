@@ -2,3 +2,9 @@
 .venv/
 seongminvenv/
 __pycache__/
+
+venv/
+.venv/
+*.pyc
+
+installed.txt
