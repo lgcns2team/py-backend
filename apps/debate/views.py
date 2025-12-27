@@ -12,6 +12,22 @@ from .redis_repository import load_debate_messages
 
 logger = logging.getLogger(__name__)
 
+def parse_json_body(request):
+    raw = request.body or b"{}"
+
+    try:
+        return json.loads(raw)
+    except UnicodeDecodeError:
+        pass
+
+    for enc in ("cp949", "euc-kr"):
+        try:
+            return json.loads(raw.decode(enc))
+        except UnicodeDecodeError:
+            continue
+
+    raise
+
 def build_debate_messages_json_lines(messages):
     # - type == "CHAT" 만 포함
     # - content가 "__MODE_CHANGE__"로 시작하거나 빈 문자열이면 제외
@@ -46,13 +62,11 @@ def build_debate_messages_json_lines(messages):
 @require_http_methods(["POST"])
 def debate_summary(request, room_id: str):
     try:
-        data = json.loads(request.body or "{}")
+        # data = json.loads(request.body or "{}")
+        data = parse_json_body(request)
         topic = (data.get("topic") or "").strip()
         if not topic:
-            return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "Missing topic"})],
-                content_type="text/event-stream"
-            )
+            return JsonResponse({"error": "Missing topic"}, status=400, json_dumps_params={"ensure_ascii": False})
 
         # Redis에서 토론 메시지 읽기
         messages = load_debate_messages(room_id)
@@ -112,9 +126,10 @@ def debate_summary(request, room_id: str):
 
     except Exception as e:
         logger.error(f"Debate summary error: {str(e)}", exc_info=True)
-        return StreamingHttpResponse(
-            [sse_event({"type": "error", "message": str(e)})],
-            content_type="text/event-stream"
+        return JsonResponse(
+            {"error": str(e)},
+            status=500,
+            json_dumps_params={"ensure_ascii": False},
         )
 
 @csrf_exempt
