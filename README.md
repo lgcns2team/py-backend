@@ -1,6 +1,9 @@
 
+### 가상환경 생성
+py -3.11 -m venv .venv
+
 ### 가상환경 들어가기
-source venv/bin/activate
+source .venv/Scripts/activat
 
 ### requirements.txt 설치
 pip3 install -r requirements.txt

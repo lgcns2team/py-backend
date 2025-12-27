@@ -1,3 +1,4 @@
 .env
-
+.venv/
+seongminvenv/
 __pycache__/

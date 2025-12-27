@@ -27,6 +27,12 @@ urlpatterns = [
     # /api/ai/chat → apps.knowledge (일반 AI 채팅)
     path('chat', include('apps.knowledge.urls')),
     
+    # /api/debate/... → apps.debate (토론 관련 API)
+    path('api/debate/', include('apps.debate.urls')),
+
+    # /api/agent-chat → apps.chat (에이전트 채팅)
+    path('api/agent-chat', include('apps.router.urls')),
+    
     # debate 관련 전체 라우팅
     path('debate/', include('apps.debate.urls')),
 ]
