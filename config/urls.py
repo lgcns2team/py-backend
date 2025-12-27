@@ -30,6 +30,9 @@ urlpatterns = [
     # /api/debate/... → apps.debate (토론 관련 API)
     path('api/debate/', include('apps.debate.urls')),
 
+    # /api/ai/debate/... → apps.debate (AI 토론 API)
+    path('api/ai/debate/', include('apps.debate.urls')),
+
     # /api/agent-chat → apps.chat (에이전트 채팅)
     path('api/agent-chat', include('apps.router.urls')),
     
