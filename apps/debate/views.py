@@ -120,26 +120,20 @@ def debate_summary(request, room_id: str):
 @csrf_exempt
 @require_http_methods(["POST"])
 def recommend_debate_topics(request):
-    """토픽 추천 전용 엔드포인트"""
+    """토픽 추천 전용 엔드포인트 - JSON 응답"""
     try:
         data = json.loads(request.body)
         
         user_query = data.get('user_query')
         
         if not user_query:
-            return StreamingHttpResponse(
-                [sse_event({'type': 'error', 'message': 'Missing user_query'})],
-                content_type='text/event-stream'
-            )
+            return JsonResponse({'error': 'Missing user_query'}, status=400)
         
         # 환경변수에서 Prompt ARN 가져오기
         prompt_arn = os.getenv('AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN')
         
         if not prompt_arn:
-            return StreamingHttpResponse(
-                [sse_event({'type': 'error', 'message': 'AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'})],
-                content_type='text/event-stream'
-            )
+            return JsonResponse({'error': 'AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'}, status=500)
         
         logger.info(f"Debate topics request - Query: {user_query[:50]}...")
         logger.info(f"Using Prompt ARN: {prompt_arn}")
@@ -149,6 +143,7 @@ def recommend_debate_topics(request):
             region_name=os.getenv('AWS_REGION', 'ap-northeast-2')
         )
         
+        # Prompt 정보 가져오기
         prompt_response = bedrock_agent.get_prompt(
             promptIdentifier=prompt_arn
         )
@@ -166,6 +161,8 @@ def recommend_debate_topics(request):
         prompt_variables = {"user_query": user_query}
         
         bedrock_runtime = BedrockClients.get_runtime()
+        
+        body = {}
         
         # TEXT 템플릿 처리
         if template_type == 'TEXT':
@@ -188,15 +185,16 @@ def recommend_debate_topics(request):
             if 'stopSequences' in inference_config:
                 body['stop_sequences'] = inference_config['stopSequences']
             
-            response = bedrock_runtime.invoke_model_with_response_stream(
+            # 동기 호출로 전체 응답 받기
+            response = bedrock_runtime.invoke_model(
                 modelId=model_id,
                 body=json.dumps(body)
             )
             
-            return StreamingHttpResponse(
-                stream_debate_response(response),
-                content_type='text/event-stream'
-            )
+            result = json.loads(response['body'].read())
+            full_text = result['content'][0]['text']
+            
+            return parse_and_return_topics(full_text)
         
         # ✅ CHAT 템플릿 처리 추가
         elif template_type == 'CHAT':
@@ -204,8 +202,6 @@ def recommend_debate_topics(request):
             chat_config = template_config.get('chat', {})
             messages = chat_config.get('messages', [])
             system_prompts = chat_config.get('system', [])
-            
-            logger.info(f"CHAT template - Messages: {len(messages)}, System prompts: {len(system_prompts)}")
             
             inference_config = variant.get('inferenceConfiguration', {})
             
@@ -242,8 +238,6 @@ def recommend_debate_topics(request):
             elif formatted_messages and not formatted_messages[0].get('content', '').strip():
                 formatted_messages[0]['content'] = user_query
             
-            logger.info(f"Formatted {len(formatted_messages)} messages")
-            
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": inference_config.get('maxTokens', 4096),
@@ -269,27 +263,116 @@ def recommend_debate_topics(request):
             
             logger.info(f"Invoking model: {model_id}")
             
-            response = bedrock_runtime.invoke_model_with_response_stream(
+            response = bedrock_runtime.invoke_model(
                 modelId=model_id,
                 body=json.dumps(body)
             )
             
-            return StreamingHttpResponse(
-                stream_debate_response_buffered(response),
-                content_type='text/event-stream'
-            )
+            result = json.loads(response['body'].read())
+            full_text = result['content'][0]['text']
+            
+            return parse_and_return_topics(full_text)
         
         else:
             raise ValueError(f"Unsupported template type: {template_type}")
+            
+        logger.info(f"Invoking model: {model_id}")
+        
+        # Invoke Model (Non-Streaming)
+        response = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            body=json.dumps(body)
+        )
+        
+        response_body = json.loads(response.get('body').read())
+        
+        # Extract text content
+        final_text = ""
+        for content in response_body.get('content', []):
+            if content.get('type') == 'text':
+                final_text += content.get('text', '')
+                
+        logger.info(f"Model response received: {len(final_text)} chars")
+        
+        # Parse JSON from model response
+        # 모델이 JSON 블록(```json ... ```)으로 감싸서 줄 수도 있으므로 처리
+        clean_text = final_text.strip()
+        if clean_text.startswith('```json'):
+            clean_text = clean_text[7:]
+        if clean_text.endswith('```'):
+            clean_text = clean_text[:-3]
+        clean_text = clean_text.strip()
+            
+        try:
+            result_json = json.loads(clean_text)
+            return JsonResponse(result_json, safe=False)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse model output as JSON: {clean_text[:100]}...")
+            # Fallback: Just return text wrapped in structure if needed, or error
+            # But frontend expects debate_topics structure. 
+            # If parsing fails, it's likely the model didn't follow instructions.
+            return JsonResponse({
+                'type': 'error',
+                'message': 'Failed to parse AI response',
+                'raw_response': final_text
+            }, status=500)
         
     except Exception as e:
         logger.error(f"Debate topics error: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return StreamingHttpResponse(
-            [sse_event({'type': 'error', 'message': str(e)})],
-            content_type='text/event-stream'
-        )
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+def parse_and_return_topics(full_text: str):
+    """
+    LLM 응답 텍스트에서 토픽을 파싱하여 JSON 반환
+    """
+    import re
+    
+    try:
+        # JSON 블록 추출 시도
+        json_match = re.search(r'\[.*\]', full_text, re.DOTALL)
+        if json_match:
+            topics_data = json.loads(json_match.group())
+            return JsonResponse({'debate_topics': topics_data})
+        
+        # JSON 없으면 텍스트 파싱
+        topics = []
+        lines = full_text.strip().split('\n')
+        current_topic = {}
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # 번호로 시작하는 라인 (1. 토픽명)
+            if re.match(r'^\d+\.\s*', line):
+                if current_topic:
+                    topics.append(current_topic)
+                topic_text = re.sub(r'^\d+\.\s*', '', line)
+                current_topic = {'topic': topic_text, 'description': ''}
+            elif current_topic:
+                current_topic['description'] += ' ' + line
+        
+        if current_topic:
+            topics.append(current_topic)
+        
+        # Clean up descriptions
+        for topic in topics:
+            topic['description'] = topic['description'].strip()
+        
+        return JsonResponse({'debate_topics': topics})
+        
+    except Exception as e:
+        logger.error(f"Parse error: {str(e)}")
+        # 파싱 실패 시 원본 텍스트 반환
+        return JsonResponse({
+            'debate_topics': [{
+                'topic': '토픽 생성됨',
+                'description': full_text[:500]
+            }]
+        })
 
 def stream_debate_response(response):
     """TEXT 템플릿 스트리밍 응답"""
