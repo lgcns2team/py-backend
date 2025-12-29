@@ -3,40 +3,45 @@ Tool 실행 핸들러
 Tool 호출 결과를 프론트엔드 형식으로 변환
 """
 import logging
+from typing import Optional
 from .definitions import TOOL_NAVIGATE_TO_PERSON
 
 logger = logging.getLogger(__name__)
 
-# 캐릭터 매핑 (테스트용 하드코딩 - 추후 DB 연동 예정)
-CHARACTER_MAP = {
-    "이순신": {
-        "promptId": "X61RA20825",
-        "characterName": "이순신"
-    },
-    # TODO: 추후 DB 연동 시 삭제
-    # "세종대왕": {"promptId": "king-sejong", "characterId": "char-002", "characterName": "세종대왕"},
-    # "광개토대왕": {"promptId": "gwanggaeto", "characterId": "char-003", "characterName": "광개토대왕"},
-}
 
-
-from typing import Optional
-
-def get_character_info(person_name: str) -> Optional[dict]:
+def get_character_info_from_db(person_name: str) -> Optional[dict]:
     """
-    캐릭터 이름으로 정보 조회
-    
-    TODO: 추후 DB 조회로 변경
+    DB에서 캐릭터 이름으로 정보 조회
     """
-    # 정확한 매칭
-    if person_name in CHARACTER_MAP:
-        return CHARACTER_MAP[person_name]
+    from apps.prompt.models import AIPerson
     
-    # 부분 매칭 (이순신 장군 → 이순신)
-    for name, info in CHARACTER_MAP.items():
-        if name in person_name or person_name in name:
-            return info
-    
-    return None
+    try:
+        # 1. 정확한 이름 매칭
+        ai_person = AIPerson.objects.filter(name=person_name).first()
+        
+        # 2. 정확한 매칭 실패 시 부분 매칭 시도
+        if not ai_person:
+            ai_person = AIPerson.objects.filter(name__icontains=person_name).first()
+        
+        # 3. 그래도 없으면 역방향 검색 (입력값이 이름에 포함되어 있는지)
+        if not ai_person:
+            for person in AIPerson.objects.all():
+                if person.name in person_name:
+                    ai_person = person
+                    break
+        
+        if ai_person:
+            logger.info(f"DB에서 캐릭터 발견: {ai_person.name} (promptId: {ai_person.promptId})")
+            return {
+                "promptId": ai_person.promptId,
+                "characterName": ai_person.name
+            }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"DB 조회 오류: {str(e)}")
+        return None
 
 
 def handle_tool_result(tool_name: str, tool_input: dict) -> dict:
@@ -52,7 +57,7 @@ def handle_tool_result(tool_name: str, tool_input: dict) -> dict:
     """
     if tool_name == TOOL_NAVIGATE_TO_PERSON:
         person_name = tool_input.get("person_name", "")
-        character_info = get_character_info(person_name)
+        character_info = get_character_info_from_db(person_name)
         
         if character_info:
             logger.info(f"캐릭터 매핑 성공: {person_name} → {character_info['promptId']}")
@@ -76,3 +81,4 @@ def handle_tool_result(tool_name: str, tool_input: dict) -> dict:
         "type": "error",
         "message": f"Unknown tool: {tool_name}"
     }
+

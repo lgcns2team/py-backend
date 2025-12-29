@@ -3,7 +3,7 @@
 py -3.11 -m venv .venv
 
 ### 가상환경 들어가기
-source .venv/Scripts/activat
+source .venv/Scripts/activate
 
 ### requirements.txt 설치
 pip3 install -r requirements.txt
