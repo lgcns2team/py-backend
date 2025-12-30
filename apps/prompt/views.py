@@ -14,6 +14,7 @@ from drf_spectacular.utils import extend_schema, OpenApiTypes
 from rest_framework.decorators import api_view
 from rest_framework import serializers
 from django.http import JsonResponse, FileResponse
+from django.shortcuts import get_object_or_404
 from apps.tools.tts import generate_tts_file
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ from apps.prompt.models import AIPerson
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+    
     try:
         data = json.loads(request.body)
         
@@ -109,14 +112,14 @@ def prompt_view(request, promptId=None):
             region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
         )
         
-        # ✅ FastAPI와 동일한 로직: ARN 구성 (버전 없음!)
-        if prompt_id.startswith('arn:'):
+        if prompt_id and prompt_id.startswith('arn:'):
             prompt_identifier = prompt_id
         else:
-            # ✅ 버전 없이 ARN 구성
-            # prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/{prompt_id}"
-            prompt_identifier = f"arn:aws:bedrock:{os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')}:811221506617:prompt/VJQKBMTQM2"
-        
+            prompt_identifier = env_prompt_arn
+
+        if not prompt_identifier:
+            logger.error("에러: 환경변수 AWS_BEDROCK_AI_PERSON을 읽지 못했습니다.")
+
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
         try:
@@ -352,38 +355,54 @@ def stream_chat_prompt_response(response, on_done=None):
         
 # TTS
 class TTSSerializer(serializers.Serializer):
-    text = serializers.CharField(help_text="음성으로 변환할 텍스트를 입력하세요.")     
-    
+    text = serializers.CharField(help_text="bedrock이 생성한 전체 답변 텍스트")     
+    promptId = serializers.CharField(help_text="인물의 고유 ID (목소리 매핑용)")
       
 @extend_schema(
-    summary="TTS 음성 생성",
+    summary="AI 답변 TTS 변환",
     request=TTSSerializer,
-    description="텍스트를 입력받아 MP3 음성 파일을 반환합니다.",
+    description="Bedrock이 생성한 답변 텍스트를 해당 인물의 목소리로 변환합니다.",
     responses={200: OpenApiTypes.BINARY},
-    parameters=[]
 )   
 @csrf_exempt
-@api_view(["POST"]) # 보통 긴 텍스트가 올 수 있으므로 POST를 추천합니다
-def tts_view(request, promptId=None):
-    """텍스트를 음성으로 변환하여 반환"""
+@api_view(["POST"]) 
+def tts_view(request):
+    """Bedrock의 최종 응답을 음성으로 변환"""
     try:
-        # data = json.loads(request.body)
+        # 1. 요청 데이터 파싱 
         text = request.data.get('text', '')
+        prompt_id = request.data.get('promptId')
         
         if not text:
             return JsonResponse({'error': 'No text provided'}, status=400)
 
-        # 1. TTS 파일 생성 (tools/tts.py의 함수 호출)
-        # 파일명을 유니크하게 만들기 위해 임시로 'speech.mp3' 사용
-        file_path = generate_tts_file(text)
+        # 2. DB에서 인물의 목소리 ID 찾기
+        # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
+        voice_id = 'Seoyeon'
         
-        # 2. 파일 응답 전송
-        # 전송 후 파일을 삭제하고 싶다면 별도의 처리가 필요하지만, 
-        # 우선은 작동 확인을 위해 바로 보냅니다.
-        response = FileResponse(open(file_path, 'rb'), content_type='audio/mpeg')
-        response['Content-Disposition'] = 'attachment; filename="tts_sample.mp3"'
-        return response
+        if prompt_id:
+            try:
+                # DB 조회
+                person = AIPerson.objects.get(promptId=prompt_id)
+                if person.voiceId:
+                    voice_id = person.voiceId
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
+            except AIPerson.DoesNotExist:
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
+
+        # 3. Amazon Polly를 통해 파일 생성
+        # 이전에 바꾼 tts.py의 generate_tts_file(text, voice_id) 호출
+        file_path = generate_tts_file(text, voice_id=voice_id)
+
+        if file_path and os.path.exists(file_path):
+            # 4. 파일 스트리밍 응답 (전송 후 브라우저에서 바로 재생 가능)
+            response = FileResponse(open(file_path, 'rb'), content_type='audio/wav')
+            # 파일명에 voice_id를 포함시켜 어떤 목소리인지 알기 쉽게 함
+            response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
+            return response
+        else:
+            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
 
     except Exception as e:
-        logger.error(f"TTS error: {str(e)}")
-        return JsonResponse({'error': str(e)}, status=500)
+        logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
+        return JsonResponse({'error': 'Internal Server Error'}, status=500)
