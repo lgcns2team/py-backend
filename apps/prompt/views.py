@@ -12,6 +12,10 @@ from uuid import UUID
 from apps.prompt.redis_chat_repository import RedisChatRepository
 from apps.prompt.dto import MessageDTO
 
+import tempfile
+from apps.stt.services.s3_service import S3Service
+from apps.stt.services.whisper_service import transcribe_audio
+
 logger = logging.getLogger(__name__)
 
 from apps.prompt.models import AIPerson

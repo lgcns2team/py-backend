@@ -29,4 +29,5 @@ urlpatterns = [
     
     # debate 관련 전체 라우팅
     path('debate/', include('apps.debate.urls')),
+    path("api/stt/", include('apps.stt.urls')),
 ]

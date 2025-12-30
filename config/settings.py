@@ -69,6 +69,7 @@ REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
 # AWS Bedrock
 AWS_REGION = os.getenv('AWS_REGION', 'ap-northeast-2')
+AWS_S3_BUCKET_NAME=os.getenv('AWS_S3_BUCKET_NAME', 'khistorybook')
 AWS_ACCOUNT_ID = os.getenv('AWS_ACCOUNT_ID', '125814533785')
 
 # CORS
