@@ -55,19 +55,11 @@
 import sys
 import os
 import uuid
-import torch
 import logging
 import subprocess
-import scipy.io.wavfile
 from django.conf import settings
-from transformers import VitsModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
-
-# 1. 가이드 음성용 모델 (Hugging Face)
-MODEL_NAME = "facebook/mms-tts-kor"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-hf_model = VitsModel.from_pretrained(MODEL_NAME)
 
 def generate_tts_file(text, voice_id=None):
     if not text: return None
@@ -77,19 +69,25 @@ def generate_tts_file(text, voice_id=None):
     os.makedirs(temp_dir, exist_ok=True)
     
     # 파일 경로들
-    guid_file = os.path.join(temp_dir, f"guid_{uuid.uuid4().hex}.wav")  # 남자 목소리 (임시)
+    guid_file = os.path.join(temp_dir, f"guid_{uuid.uuid4().hex}.wav")  # Edge-TTS 여성 목소리 (임시)
     final_file = os.path.join(temp_dir, f"tts_{uuid.uuid4().hex}.wav")  # 카리나 목소리 (최종)
     
     try:
-        # 1. 일단 허깅페이스로 "남자 목소리" 가이드 파일을 만듭니다.
-        inputs = tokenizer(text, return_tensors="pt")
-        with torch.no_grad():
-            output = hf_model(**inputs).waveform
-        scipy.io.wavfile.write(guid_file, rate=hf_model.config.sampling_rate, data=output.squeeze().numpy())
+        # 1. Edge-TTS로 자연스러운 한국어 여성 목소리 가이드 파일 생성
+        import asyncio
+        import edge_tts
+        
+        async def create_base_tts():
+            # ko-KR-SunHiNeural: 한국어 여성 목소리 (자연스러운 발음)
+            communicate = edge_tts.Communicate(text, "ko-KR-SunHiNeural")
+            await communicate.save(guid_file)
+        
+        # asyncio 이벤트 루프 실행
+        asyncio.run(create_base_tts())
 
         # 2. [수정 포인트] 경로 설정
-        # 이제 ttsSample이 py-backend 안에 있으므로 아래와 같이 잡습니다.
-        rvc_python_path = sys.executable  # 현재 장고 가상환경의 파이썬 경로를 자동으로 잡음
+        # ttsSample은 Python 3.10이 필요하므로 ttsSample의 가상환경 사용
+        rvc_python_path = os.path.join(base_dir, "ttsSample", ".venv", "Scripts", "python.exe")
         rvc_main_path = os.path.join(base_dir, "ttsSample", "main.py")
         
         # 모델 파일은 py-backend/models/ 안에 있다고 가정
@@ -105,11 +103,11 @@ def generate_tts_file(text, voice_id=None):
             "--model", model_path,
             "--index", index_path,
             "--output", final_file,
-            "--f0_up_key", "12"
+            "--f0_up_key", "-6"
         ], cwd=base_dir,
             env=current_env,
             check=True,
-            capture_output=True,
+            capture_output=False,
             text=True) # cwd를 base_dir로 설정
 
         if os.path.exists(guid_file):

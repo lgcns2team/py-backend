@@ -386,7 +386,7 @@ def tts_view(request):
                 person = AIPerson.objects.get(promptId=prompt_id)
                 if person.voiceId:
                     voice_id = person.voiceId
-                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: 카리나")
             except AIPerson.DoesNotExist:
                 logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
 

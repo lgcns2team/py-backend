@@ -1,5 +1,6 @@
 import sys
 from dataclasses import dataclass, field
+from typing import Any
 
 # ==========================================
 # 0. 파이썬 3.11 fairseq 에러 패치 (가장 먼저!)
@@ -35,6 +36,22 @@ except Exception as e:
     print(f"[정보] 패치 적용 중 참고: {e}")
 
 # ==========================================
+# 0-2. PyTorch 2.6+ torch.load weights_only 패치
+# ==========================================
+import torch
+_original_torch_load = torch.load
+
+def patched_torch_load(*args, **kwargs):
+    # weights_only가 명시적으로 지정되지 않은 경우 False로 설정
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = patched_torch_load
+print("[성공] PyTorch 2.6+ torch.load 패치가 적용되었습니다.")
+
+
+# ==========================================
 # 1. 나머지 라이브러리 임포트
 # ==========================================
 import asyncio
@@ -43,7 +60,6 @@ import uuid
 import argparse
 from rvc_python.infer import RVCInference # 패치 후에 임포트!
 import edge_tts
-import torch
 
 # ==========================================
 # 2. RVC 변환 로직
@@ -60,12 +76,12 @@ def run_rvc_conversion(input_audio_path, model_path, index_path, output_path, pi
     
     # 모델 로드
     rvc.load_model(model_path, version="v2", index_path=index_path or "")
-    rvc.set_params(f0up_key=pitch, f0method="rmvpe", index_rate=0.75)
+    rvc.set_params(f0up_key=pitch, f0method="rmvpe", index_rate=1.0)
     
     # 변환 실행
     rvc.infer_file(input_audio_path, output_path)
     print(f"[완료] 카리나 목소리 생성됨: {output_path}")
-
+    
 # ==========================================
 # 3. 메인 실행부
 # ==========================================
@@ -79,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--index", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--f0_up_key", type=int, default=12)
+    parser.add_argument("--f0_up_key", type=int, default=-12)
     args = parser.parse_args()
 
     temp_wav = f"temp_{uuid.uuid4().hex}.wav"
