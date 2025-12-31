@@ -33,7 +33,68 @@ def prompt_view(request, promptId=None):
         prompt_id = promptId or data.get('prompt_id')
         user_query = data.get('message') or data.get('user_query')
         
-        user_id = request.GET.get("userId")
+        # 음성 요청 케이스: S3 key / 파일 업로드로 STT 수행
+        stt_text = None
+        s3_key = data.get("s3_key") or data.get("voice_key")
+        audio_file = request.FILES.get("audio") if hasattr(request, "FILES") else None
+
+        if not user_query:
+            # 1) S3 key 기반 STT
+            if s3_key:
+                if not str(s3_key).startswith("voice/"):
+                    return StreamingHttpResponse(
+                        [sse_event({'type': 'error', 'message': 'Invalid s3_key prefix (must start with voice/)'})],
+                        content_type='text/event-stream'
+                    )
+
+                s3 = S3Service()
+                try:
+                    # 업로드 여부 확인
+                    s3.head_object(s3_key)
+                except Exception as e:
+                    return StreamingHttpResponse(
+                        [sse_event({'type': 'error', 'message': f'S3 object not found: {str(e)}'})],
+                        content_type='text/event-stream'
+                    )
+
+                tmp_dir = tempfile.mkdtemp(prefix="stt_")
+                local_path = os.path.join(tmp_dir, os.path.basename(s3_key))
+
+                try:
+                    s3.download_to_file(key=s3_key, local_path=local_path)  # ✅ [추가]
+                    stt_text = transcribe_audio(local_path, language="ko")  # ✅ [추가]
+                    user_query = stt_text
+                finally:
+                    # 임시파일 정리
+                    try:
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                        os.rmdir(tmp_dir)
+                    except Exception:
+                        pass
+
+            # 2) 파일 업로드 기반 STT
+            elif audio_file:
+                tmp_dir = tempfile.mkdtemp(prefix="stt_")
+                local_path = os.path.join(tmp_dir, audio_file.name)
+
+                try:
+                    with open(local_path, "wb") as f:
+                        for chunk in audio_file.chunks():
+                            f.write(chunk)
+                    stt_text = transcribe_audio(local_path, language="ko")
+                    user_query = stt_text
+                finally:
+                    try:
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                        os.rmdir(tmp_dir)
+                    except Exception:
+                        pass
+
+
+        # user_id = request.GET.get("userId")
+        user_id = request.GET.get("userId") or "test-user"
 
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
@@ -54,7 +115,6 @@ def prompt_view(request, promptId=None):
                 [sse_event({'type': 'error', 'message': 'Invalid userId'})],
                 content_type='text/event-stream'
             )
-
         redis_repo = RedisChatRepository()
         history_key = redis_repo.build_aiperson_key(prompt_id, user_id)
 
@@ -170,9 +230,14 @@ def prompt_view(request, promptId=None):
                     modelId=model_id,
                     body=json.dumps(body)
                 )
-                
+
+                def chained_stream():
+                    if stt_text:
+                        yield sse_event({'type': 'stt', 'text': stt_text})  # ✅ [추가]
+                    yield from stream_text_prompt_response(response, on_done=on_done_save)
+
                 return StreamingHttpResponse(
-                    stream_text_prompt_response(response, on_done=on_done_save),
+                    chained_stream(),
                     content_type='text/event-stream'
                 )
             
@@ -249,9 +314,14 @@ def prompt_view(request, promptId=None):
                     modelId=model_id,
                     body=json.dumps(body)
                 )
-                
+
+                def chained_stream():
+                    if stt_text:
+                        yield sse_event({'type': 'stt', 'text': stt_text})  # ✅ [추가]
+                    yield from stream_text_prompt_response(response, on_done=on_done_save)
+
                 return StreamingHttpResponse(
-                    stream_chat_prompt_response(response, on_done=on_done_save),
+                    chained_stream(),
                     content_type='text/event-stream'
                 )
             

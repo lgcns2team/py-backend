@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Browser STT POC (Web Speech API)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; line-height: 1.4; }
+    button { padding: 10px 14px; margin-right: 8px; cursor: pointer; }
+    select { padding: 8px; }
+    .row { margin: 12px 0; }
+    .box { padding: 12px; border: 1px solid #ddd; border-radius: 8px; min-height: 60px; }
+    .label { font-weight: 700; margin-bottom: 6px; }
+    .muted { color: #666; font-size: 14px; }
+    .status { font-weight: 700; }
+    .warn { color: #b00; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Browser STT POC (실시간)</h1>
+  <div class="row muted">
+    - interim(중간 결과): 말하는 동안 계속 바뀜<br/>
+    - final(확정 결과): 문장 확정 시 누적됨
+  </div>
+
+  <div class="row">
+    <label>언어: </label>
+    <select id="lang">
+      <option value="ko-KR" selected>ko-KR (한국어)</option>
+      <option value="en-US">en-US (English)</option>
+      <option value="ja-JP">ja-JP (日本語)</option>
+    </select>
+  </div>
+
+  <div class="row">
+    <button id="btnStart">Start</button>
+    <button id="btnStop" disabled>Stop</button>
+    <button id="btnClear">Clear</button>
+    <span class="status" id="status">idle</span>
+  </div>
+
+  <div class="row">
+    <div class="label">Interim (실시간 자막)</div>
+    <div class="box" id="interim"></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Final (확정 텍스트 누적)</div>
+    <div class="box" id="final"></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Log</div>
+    <div class="box" id="log" style="white-space: pre-wrap; font-size: 13px;"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const logBox = $("log");
+
+    function log(msg) {
+      const t = new Date().toISOString().slice(11, 19);
+      logBox.textContent = `[${t}] ${msg}\n` + logBox.textContent;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      $("status").innerHTML = `<span class="warn">이 브라우저는 SpeechRecognition(Web Speech API)을 지원하지 않습니다.</span>`;
+      log("SpeechRecognition not supported.");
+      $("btnStart").disabled = true;
+    } else {
+      log("SpeechRecognition supported.");
+    }
+
+    let rec = null;
+    let finalAccum = "";
+
+    function setStatus(s) {
+      $("status").textContent = s;
+    }
+
+    function createRecognizer() {
+      const r = new SpeechRecognition();
+      r.lang = $("lang").value;
+      r.interimResults = true;     // ✅ 실시간 자막
+      r.continuous = true;         // ✅ 이어 말하기 (브라우저별 편차 있음)
+      r.maxAlternatives = 1;
+
+      r.onstart = () => {
+        setStatus("listening...");
+        log("onstart");
+        $("btnStart").disabled = true;
+        $("btnStop").disabled = false;
+      };
+
+      r.onend = () => {
+        setStatus("ended");
+        log("onend");
+        $("btnStart").disabled = false;
+        $("btnStop").disabled = true;
+      };
+
+      r.onerror = (e) => {
+        log(`onerror: ${e.error}`);
+        setStatus(`error: ${e.error}`);
+      };
+
+      r.onresult = (event) => {
+        let interim = "";
+        let finalText = "";
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const text = (res[0] && res[0].transcript) ? res[0].transcript : "";
+          if (res.isFinal) finalText += text;
+          else interim += text;
+        }
+
+        $("interim").textContent = interim.trim();
+
+        if (finalText.trim()) {
+          finalAccum += (finalAccum ? " " : "") + finalText.trim();
+          $("final").textContent = finalAccum;
+          log(`final: ${finalText.trim()}`);
+        }
+      };
+
+      return r;
+    }
+
+    $("btnStart").addEventListener("click", async () => {
+      finalAccum = $("final").textContent || "";
+      $("interim").textContent = "";
+
+      try {
+        // 마이크 권한 요청 트리거용 (일부 환경에서 도움이 됨)
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        log("mic permission granted");
+      } catch (e) {
+        log("mic permission denied or error");
+        setStatus("mic permission required");
+        return;
+      }
+
+      rec = createRecognizer();
+      try {
+        rec.start();
+        log("rec.start()");
+      } catch (e) {
+        // start()가 중복 호출되면 예외가 날 수 있음
+        log("start error (maybe already started)");
+      }
+    });
+
+    $("btnStop").addEventListener("click", () => {
+      if (rec) {
+        rec.stop();
+        log("rec.stop()");
+      }
+    });
+
+    $("btnClear").addEventListener("click", () => {
+      finalAccum = "";
+      $("interim").textContent = "";
+      $("final").textContent = "";
+      log("cleared");
+      setStatus("idle");
+    });
+
+    $("lang").addEventListener("change", () => {
+      log(`lang changed to ${$("lang").value}`);
+    });
+  </script>
+</body>
+</html>
