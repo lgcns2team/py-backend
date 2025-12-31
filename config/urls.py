@@ -34,6 +34,7 @@ urlpatterns = [
     path('chat', include('apps.knowledge.urls')),
     
 <<<<<<< HEAD
+<<<<<<< HEAD
     # /api/debate/... → apps.debate (토론 관련 API)
     path('api/debate/', include('apps.debate.urls')),
 
@@ -46,6 +47,8 @@ urlpatterns = [
     # debate 관련 전체 라우팅
     path('debate/', include('apps.debate.urls')),
 =======
+=======
+>>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e
     # /api/debate/topics/recommend → apps.debate (토픽 추천 전용)
     path('api/debate/topics/recommend', include('apps.debate.urls')),
     

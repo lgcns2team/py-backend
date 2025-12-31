@@ -1,6 +1,7 @@
 venv/
 env/
 .venv/
+<<<<<<< HEAD
 
 .env
 <<<<<<< HEAD
@@ -15,6 +16,11 @@ venv/
 installed.txt
 =======
 
+=======
+
+.env
+
+>>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e
 **/__pycache__/
 *.py[cod]
 *$py.class
@@ -22,5 +28,9 @@ installed.txt
 media/tts/
 *.mp3
 
+<<<<<<< HEAD
+db.sqlite3
+>>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e
+=======
 db.sqlite3
 >>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e
