@@ -8,6 +8,12 @@ source .venv/Scripts/activate
 ### requirements.txt 설치
 pip3 install -r requirements.txt
 
+<<<<<<< HEAD
+=======
+### ttsSample/requirements.txt 설치
+pip install -r ttsSample/requirements.txt
+
+>>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e
 ### migration 적용
 python3 manage.py migrate
 

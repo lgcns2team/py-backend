@@ -1,4 +1,9 @@
+venv/
+env/
+.venv/
+
 .env
+<<<<<<< HEAD
 .venv/
 seongminvenv/
 __pycache__/
@@ -8,3 +13,14 @@ venv/
 *.pyc
 
 installed.txt
+=======
+
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+media/tts/
+*.mp3
+
+db.sqlite3
+>>>>>>> 02bcd133b6a266602266715d5a9a183ee0780c0e

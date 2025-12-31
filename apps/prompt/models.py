@@ -55,6 +55,13 @@ class AIPerson(models.Model):
         blank=True,
         db_column="longitude"
     )
+    
+    voiceId = models.CharField(
+        null=True,
+        blank=True,
+        default="Dohyun",
+        db_column="voice_id"
+    )
 
     class Meta:
         db_table = "ai_person"
