@@ -1,6 +1,9 @@
 from django.urls import path, include, re_path
 from django.http import JsonResponse
 from datetime import datetime
+# config/urls.py 상단에 추가
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from apps.prompt import views as prompt_views
 
 def root_view(request):
     return JsonResponse({
@@ -22,7 +25,7 @@ urlpatterns = [
 
     # /api/ai-person/... → apps.prompt (AI 인물)
     # api/ 지우고 apps.prompt 로 이동 필요
-     path('api/', include('apps.prompt.urls')),
+    path('api/', include('apps.prompt.urls')),
     
     # /api/ai/chat → apps.knowledge (일반 AI 채팅)
     path('chat', include('apps.knowledge.urls')),
@@ -38,4 +41,17 @@ urlpatterns = [
     
     # debate 관련 전체 라우팅
     path('debate/', include('apps.debate.urls')),
+    
+    # === develop 브랜치 추가 기능 ===
+    
+    # TTS 엔드포인트
+    path('api/prompt/speak/', prompt_views.tts_view, name='tts_view'),
+    
+    # /api/ai-person/{promptId}/chat → apps.prompt (캐릭터 채팅)
+    re_path(r'^api/ai-person/(?P<promptId>[^/]+)/chat$', include('apps.prompt.urls')),
+    
+    # 스웨거 파일 생성 (YAML/JSON)
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    # 스웨거 UI 화면
+    path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]

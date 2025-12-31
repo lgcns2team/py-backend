@@ -108,7 +108,6 @@ def knowledge_base_streaming_response(query: str):
                 'message': 'Knowledge Base not configured'
             }, status=500)
         
-
         bedrock_agent_runtime = BedrockClients.get_agent_runtime()
         response = bedrock_agent_runtime.retrieve_and_generate_stream(
             input={'text': query},
@@ -181,8 +180,8 @@ def stream_war_navigation_and_kb(query, tool_params):
     # 2. KB 검색 시작 (사용자 질문으로 답변 생성)
     # 기존 knowledge_base_streaming_response 로직 재사용
     try:
-        kb_id = os.getenv('AWS_')
-        model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
+        kb_id = os.getenv('BEDROCK_KB_ID')
+        model_arn = os.getenv('BEDROCK_KB_MODEL_ARN')
         
         bedrock_agent_runtime = BedrockClients.get_agent_runtime()
         response = bedrock_agent_runtime.retrieve_and_generate_stream(

@@ -8,6 +8,17 @@ from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
+
+# apps/prompt/views.py 상단에 추가
+from drf_spectacular.utils import extend_schema, OpenApiTypes
+from rest_framework.decorators import api_view
+from rest_framework import serializers
+from django.http import JsonResponse, FileResponse
+from django.shortcuts import get_object_or_404
+from apps.tools.tts import generate_tts_file
+logger = logging.getLogger(__name__)
+
+# from apps.prompt.redis_repo import RedisChatRepository, MessageDTO
 from uuid import UUID
 from apps.prompt.redis_chat_repository import RedisChatRepository
 from apps.prompt.dto import MessageDTO
@@ -21,7 +32,7 @@ from apps.prompt.models import AIPerson
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
     env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
-
+    
     try:
         data = json.loads(request.body)
         
@@ -101,12 +112,14 @@ def prompt_view(request, promptId=None):
             region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
         )
         
-        # ✅ FastAPI와 동일한 로직: ARN 구성 (버전 없음!)
-        if prompt_id.startswith('arn:'):
+        if prompt_id and prompt_id.startswith('arn:'):
             prompt_identifier = prompt_id
         else:
             prompt_identifier = env_prompt_arn
-        
+
+        if not prompt_identifier:
+            logger.error("에러: 환경변수 AWS_BEDROCK_AI_PERSON을 읽지 못했습니다.")
+
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
         try:
@@ -338,3 +351,58 @@ def stream_chat_prompt_response(response, on_done=None):
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+        
+        
+# TTS
+class TTSSerializer(serializers.Serializer):
+    text = serializers.CharField(help_text="bedrock이 생성한 전체 답변 텍스트")     
+    promptId = serializers.CharField(help_text="인물의 고유 ID (목소리 매핑용)")
+      
+@extend_schema(
+    summary="AI 답변 TTS 변환",
+    request=TTSSerializer,
+    description="Bedrock이 생성한 답변 텍스트를 해당 인물의 목소리로 변환합니다.",
+    responses={200: OpenApiTypes.BINARY},
+)   
+@csrf_exempt
+@api_view(["POST"]) 
+def tts_view(request):
+    """Bedrock의 최종 응답을 음성으로 변환"""
+    try:
+        # 1. 요청 데이터 파싱 
+        text = request.data.get('text', '')
+        prompt_id = request.data.get('promptId')
+        
+        if not text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
+        # 2. DB에서 인물의 목소리 ID 찾기
+        # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
+        voice_id = 'Seoyeon'
+        
+        if prompt_id:
+            try:
+                # DB 조회
+                person = AIPerson.objects.get(promptId=prompt_id)
+                if person.voiceId:
+                    voice_id = person.voiceId
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: 카리나")
+            except AIPerson.DoesNotExist:
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
+
+        # 3. Amazon Polly를 통해 파일 생성
+        # 이전에 바꾼 tts.py의 generate_tts_file(text, voice_id) 호출
+        file_path = generate_tts_file(text, voice_id=voice_id)
+
+        if file_path and os.path.exists(file_path):
+            # 4. 파일 스트리밍 응답 (전송 후 브라우저에서 바로 재생 가능)
+            response = FileResponse(open(file_path, 'rb'), content_type='audio/wav')
+            # 파일명에 voice_id를 포함시켜 어떤 목소리인지 알기 쉽게 함
+            response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
+            return response
+        else:
+            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
+
+    except Exception as e:
+        logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
+        return JsonResponse({'error': 'Internal Server Error'}, status=500)

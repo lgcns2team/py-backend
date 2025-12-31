@@ -71,24 +71,27 @@ def debate_summary(request, room_id: str):
         # Redis에서 토론 메시지 읽기
         messages = load_debate_messages(room_id)
         if not messages:
-            return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "No debate messages in Redis"})],
-                content_type="text/event-stream"
+            return JsonResponse(
+                {"error": "No debate messages in Redis"},
+                status=404,
+                json_dumps_params={"ensure_ascii": False}
             )
 
         debate_messages_str, used_count = build_debate_messages_json_lines(messages)
         if used_count == 0:
-            return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "No usable CHAT messages (all filtered)"})],
-                content_type="text/event-stream"
+            return JsonResponse(
+                {"error": "No usable CHAT messages (all filtered)"},
+                status=404,
+                json_dumps_params={"ensure_ascii": False}
             )
 
         # Bedrock Prompt ARN
         prompt_arn = os.getenv("AWS_BEDROCK_DEBATE_SUMMARY_PROMPT_ARN")
         if not prompt_arn:
-            return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "AWS_BEDROCK_DEBATE_SUMMARY_PROMPT_ARN not configured"})],
-                content_type="text/event-stream"
+            return JsonResponse(
+                {"error": "AWS_BEDROCK_DEBATE_SUMMARY_PROMPT_ARN not configured"},
+                status=500,
+                json_dumps_params={"ensure_ascii": False}
             )
 
         # Bedrock 프롬프트에 들어갈 변수
