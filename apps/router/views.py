@@ -102,8 +102,6 @@ def knowledge_base_streaming_response(query: str):
         kb_id = os.getenv('BEDROCK_KB_ID')
         model_arn = os.getenv('BEDROCK_KB_MODEL_ARN')
         
-        print("kb_id", kb_id)
-        print("model_arn", model_arn    )
         if not kb_id or not model_arn:
             return JsonResponse({
                 'type': 'error',
