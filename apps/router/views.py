@@ -99,8 +99,8 @@ def agent_chat_view(request):
 def knowledge_base_streaming_response(query: str):
     """Knowledge Base 스트리밍 검색 응답"""
     try:
-        kb_id = os.getenv('BEDROCK_KB_ID')
-        model_arn = os.getenv('BEDROCK_KB_MODEL_ARN')
+        kb_id = os.getenv('AWS_BEDROCK_KB_ID')
+        model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
         
         if not kb_id or not model_arn:
             return JsonResponse({
