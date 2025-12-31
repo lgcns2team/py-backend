@@ -25,8 +25,8 @@ def knowledge_base_view(request):
             )
         
         # ✅ .env 파일의 실제 변수명 사용
-        kb_id = data.get('kb_id') or os.getenv('AWS_BEDROCK_KB_ID')
-        model_arn = data.get('model_arn') or os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
+        kb_id = data.get('kb_id') or os.getenv('BEDROCK_KB_ID')
+        model_arn = data.get('model_arn') or os.getenv('BEDROCK_KB_MODEL_ARN')
         
         if not kb_id or not model_arn:
             logger.error(f"Missing config - KB_ID: {kb_id}, MODEL_ARN: {model_arn}")

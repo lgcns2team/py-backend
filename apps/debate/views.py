@@ -84,10 +84,10 @@ def debate_summary(request, room_id: str):
             )
 
         # Bedrock Prompt ARN
-        prompt_arn = os.getenv("AWS_BEDROCK_DEBATE_SUMMARY_PROMPT_ARN")
+        prompt_arn = os.getenv("BEDROCK_DEBATE_SUMMARY_PROMPT_ARN")
         if not prompt_arn:
             return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "AWS_BEDROCK_DEBATE_SUMMARY_PROMPT_ARN not configured"})],
+                [sse_event({"type": "error", "message": "BEDROCK_DEBATE_SUMMARY_PROMPT_ARN not configured"})],
                 content_type="text/event-stream"
             )
 
@@ -145,10 +145,10 @@ def recommend_debate_topics(request):
             return JsonResponse({'error': 'Missing user_query'}, status=400)
         
         # 환경변수에서 Prompt ARN 가져오기
-        prompt_arn = os.getenv('AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN')
+        prompt_arn = os.getenv('BEDROCK_DEBATE_TOPICS_PROMPT_ARN')
         
         if not prompt_arn:
-            return JsonResponse({'error': 'AWS_BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'}, status=500)
+            return JsonResponse({'error': 'BEDROCK_DEBATE_TOPICS_PROMPT_ARN not configured'}, status=500)
         
         logger.info(f"Debate topics request - Query: {user_query[:50]}...")
         logger.info(f"Using Prompt ARN: {prompt_arn}")
