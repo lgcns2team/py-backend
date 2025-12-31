@@ -102,7 +102,7 @@ def knowledge_base_streaming_response(query: str):
         kb_id = os.getenv('AWS_BEDROCK_KB_ID')
         model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
         
-        print("kb_id", kb_id)
+        
         print("model_arn", model_arn)
         if not kb_id or not model_arn:
             return JsonResponse({
@@ -134,7 +134,7 @@ def knowledge_base_streaming_response(query: str):
             [sse_event({'type': 'error', 'message': str(e)})],
             content_type='text/event-stream'
         )
-
+    
 
 def stream_kb_response(response):
     """Knowledge Base 스트리밍 응답 처리"""
