@@ -102,12 +102,15 @@ def knowledge_base_streaming_response(query: str):
         kb_id = os.getenv('AWS_BEDROCK_KB_ID')
         model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
         
+        print("kb_id", kb_id)
+        print("model_arn", model_arn    )
         if not kb_id or not model_arn:
             return JsonResponse({
                 'type': 'error',
                 'message': 'Knowledge Base not configured'
             }, status=500)
         
+
         bedrock_agent_runtime = BedrockClients.get_agent_runtime()
         response = bedrock_agent_runtime.retrieve_and_generate_stream(
             input={'text': query},
