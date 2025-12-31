@@ -6,7 +6,6 @@ pipeline {
         ENVIRONMENT = 'prod'
         AWS_REGION = 'ap-northeast-2'
         SERVICE_NAME = 'django'
-        AWS_ACCOUNT_ID = credentials('aws-account-id') // Jenkins에 등록 필요
     }
     
     stages {
@@ -50,13 +49,17 @@ pipeline {
         stage('AWS ECR Login') {
             steps {
                 echo '=== Logging in to ECR ==='
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
                     sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         echo "AWS Account: ${AWS_ACCOUNT_ID}"
                         
                         aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                            docker login --username AWS --password-stdin \
+                            ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                     '''
                 }
             }
@@ -65,20 +68,24 @@ pipeline {
         stage('Ensure ECR Repository') {
             steps {
                 echo '=== Ensuring ECR repository exists ==='
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
                     sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}-${SERVICE_NAME}"
                         
-                        if ! aws ecr describe-repositories --repository-names ${REPO_NAME} --region ${AWS_REGION} &>/dev/null; then
-                            echo "Creating ECR repository: ${REPO_NAME}"
+                        # 레포지토리 존재 여부 확인 (에러 무시)
+                        if aws ecr describe-repositories --repository-names ${REPO_NAME} --region ${AWS_REGION} 2>/dev/null; then
+                            echo "✅ ECR repository exists: ${REPO_NAME}"
+                        else
+                            echo "📦 Creating ECR repository: ${REPO_NAME}"
                             aws ecr create-repository \
                                 --repository-name ${REPO_NAME} \
                                 --region ${AWS_REGION} \
                                 --image-scanning-configuration scanOnPush=true \
                                 --encryption-configuration encryptionType=AES256
-                        else
-                            echo "ECR repository exists: ${REPO_NAME}"
                         fi
                     '''
                 }
@@ -88,7 +95,10 @@ pipeline {
         stage('Build and Push Docker Image') {
             steps {
                 echo '=== Building Django image for AMD64 ==='
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
                     sh '''
                         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                         ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-${SERVICE_NAME}"
@@ -115,20 +125,23 @@ pipeline {
         stage('Update ECS Service') {
             steps {
                 echo '=== Updating ECS Service ==='
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
                     sh '''
                         CLUSTER_NAME="${PROJECT_NAME}-${ENVIRONMENT}-cluster"
                         SERVICE_FULL_NAME="${PROJECT_NAME}-${ENVIRONMENT}-${SERVICE_NAME}"
                         
                         echo "Checking if cluster ${CLUSTER_NAME} exists..."
                         
-                        if aws ecs describe-clusters --clusters ${CLUSTER_NAME} --region ${AWS_REGION} | grep -q "ACTIVE"; then
+                        if aws ecs describe-clusters --clusters ${CLUSTER_NAME} --region ${AWS_REGION} 2>/dev/null | grep -q "ACTIVE"; then
                             echo "Cluster found. Checking service..."
                             
                             if aws ecs describe-services \
                                 --cluster ${CLUSTER_NAME} \
                                 --services ${SERVICE_FULL_NAME} \
-                                --region ${AWS_REGION} | grep -q "ACTIVE"; then
+                                --region ${AWS_REGION} 2>/dev/null | grep -q "ACTIVE"; then
                                 
                                 echo "🔄 Updating ${SERVICE_FULL_NAME}..."
                                 aws ecs update-service \
@@ -149,43 +162,17 @@ pipeline {
                 }
             }
         }
-        
-        stage('Wait for Deployment') {
-            steps {
-                echo '=== Waiting for deployment to complete ==='
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
-                    sh '''
-                        CLUSTER_NAME="${PROJECT_NAME}-${ENVIRONMENT}-cluster"
-                        SERVICE_FULL_NAME="${PROJECT_NAME}-${ENVIRONMENT}-${SERVICE_NAME}"
-                        
-                        echo "Waiting for service to stabilize..."
-                        aws ecs wait services-stable \
-                            --cluster ${CLUSTER_NAME} \
-                            --services ${SERVICE_FULL_NAME} \
-                            --region ${AWS_REGION} || echo "Wait timeout or service not ready"
-                        
-                        echo "✅ Deployment completed!"
-                    '''
-                }
-            }
-        }
     }
     
     post {
         success {
             echo '✅ Django deployment to ECS succeeded!'
-            echo "📊 Monitor at: https://${AWS_REGION}.console.aws.amazon.com/ecs/home?region=${AWS_REGION}#/clusters/${PROJECT_NAME}-${ENVIRONMENT}-cluster/services"
         }
         failure {
             echo '❌ Django deployment failed!'
         }
         always {
-            echo '=== Cleaning up ==='
-            sh '''
-                docker system prune -f || true
-            '''
+            sh 'docker system prune -f || true'
         }
     }
 }
-
-
