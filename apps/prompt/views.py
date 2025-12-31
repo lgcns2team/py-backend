@@ -31,7 +31,7 @@ from apps.prompt.models import AIPerson
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
-    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+    env_prompt_arn = os.getenv('BEDROCK_AI_PERSON')
     
     try:
         data = json.loads(request.body)
@@ -118,7 +118,7 @@ def prompt_view(request, promptId=None):
             prompt_identifier = env_prompt_arn
 
         if not prompt_identifier:
-            logger.error("에러: 환경변수 AWS_BEDROCK_AI_PERSON을 읽지 못했습니다.")
+            logger.error("에러: 환경변수 BEDROCK_AI_PERSON을 읽지 못했습니다.")
 
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
