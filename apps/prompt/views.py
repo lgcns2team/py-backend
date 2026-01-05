@@ -39,7 +39,7 @@ def prompt_view(request, promptId=None):
         # 모두 body에서 받음 (URL은 fallback)
         prompt_id = data.get('promptId') or promptId
         user_query = data.get('message') or data.get('user_query')
-        user_id = data.get('userId')  # ⭐ body에서 받음 (query 아님!)
+        user_id = data.get('userId') 
 
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
