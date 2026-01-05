@@ -3,49 +3,41 @@ import logging
 import os
 import boto3
 from django.http import StreamingHttpResponse, HttpResponseNotAllowed
-from asgiref.sync import sync_to_async
+from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
-
-# apps/prompt/views.py 상단에 추가
 from drf_spectacular.utils import extend_schema, OpenApiTypes
 from rest_framework.decorators import api_view
 from rest_framework import serializers
 from django.http import JsonResponse, FileResponse
 from django.shortcuts import get_object_or_404
 from apps.tools.tts import generate_tts_file
+
 logger = logging.getLogger(__name__)
 
-# from apps.prompt.redis_repo import RedisChatRepository, MessageDTO
 from uuid import UUID
 from apps.prompt.redis_chat_repository import RedisChatRepository
 from apps.prompt.dto import MessageDTO
-
-logger = logging.getLogger(__name__)
-
 from apps.prompt.models import AIPerson
 
-def safe_next(iterator):
-    try:
-        return next(iterator)
-    except StopIteration:
-        return None
 
-async def prompt_view(request, promptId=None):
+def prompt_view(request, promptId=None):
+    """Bedrock Prompt 호출 (스트리밍) - 완전 동기 버전"""
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
-    """Bedrock Prompt 호출 (스트리밍) - body에서 모든 파라미터 받음"""
-    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')  # ARN 뒤에 _ARN 추가!
+    
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')
     
     try:
         data = json.loads(request.body)
         
-        # 모두 body에서 받음 (URL은 fallback)
+        # body에서 파라미터 받기
         prompt_id = data.get('promptId') or promptId
         user_query = data.get('message') or data.get('user_query')
-        user_id = data.get('userId') 
+        user_id = data.get('userId')
 
+        # 필수 파라미터 검증
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
                 [sse_event({'type': 'error', 'message': 'Missing prompt_id or message'})],
@@ -54,10 +46,11 @@ async def prompt_view(request, promptId=None):
         
         if not user_id:
             return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "Missing userId in body"})],  # ⭐ 메시지 수정
+                [sse_event({"type": "error", "message": "Missing userId in body"})],
                 content_type="text/event-stream",
             )
         
+        # UUID 검증
         try:
             user_id = UUID(user_id)
         except ValueError:
@@ -66,53 +59,50 @@ async def prompt_view(request, promptId=None):
                 content_type='text/event-stream'
             )
 
-
+        # Redis 설정
         redis_repo = RedisChatRepository()
         history_key = redis_repo.build_aiperson_key(prompt_id, user_id)
-
         user_msg = MessageDTO.user(user_query)
 
-        async def on_done_save_async(full_response: str):
+        # 콜백 함수 생성 (클로저로 변수 캡처)
+        def on_done_callback(full_response: str):
+            """스트리밍 완료 후 Redis 저장"""
             try:
                 assistant_msg = MessageDTO.assistant(full_response)
-                # Redis operations wrapped in sync_to_async
-                await sync_to_async(redis_repo.append_message)(history_key, user_msg)
-                await sync_to_async(redis_repo.append_message)(history_key, assistant_msg)
-                logger.info("Saved chat history key=%s (user_len=%s, assistant_len=%s)",
-                            history_key, len(user_query), len(full_response))
+                redis_repo.append_message(history_key, user_msg)
+                redis_repo.append_message(history_key, assistant_msg)
+                logger.info(f"Saved chat history key={history_key} (user_len={len(user_query)}, assistant_len={len(full_response)})")
             except Exception as e:
-                logger.error("Redis save failed: %s", str(e))
-    
+                logger.error(f"Redis save failed: {str(e)}")
+        
+        # AI Person 정보 가져오기 (동기)
+        person_variables = {}
         try:
-            # Use aget for async ORM lookup
-            try:
-                ai_person = await AIPerson.objects.aget(promptId=prompt_id)
-                logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
+            ai_person = AIPerson.objects.get(promptId=prompt_id)
+            logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
 
-                person_variables = {
-                    'name': ai_person.name,
-                    'era': ai_person.era,
-                    'summary': ai_person.summary or '',
-                    'year': str(ai_person.year) if ai_person.year else '',
-                    'greeting_message': ai_person.greetingMessage or '',
-                    'ex_question': ai_person.exQuestion or '',
-                }
+            person_variables = {
+                'name': ai_person.name,
+                'era': ai_person.era,
+                'summary': ai_person.summary or '',
+                'year': str(ai_person.year) if ai_person.year else '',
+                'greeting_message': ai_person.greetingMessage or '',
+                'ex_question': ai_person.exQuestion or '',
+            }
 
-                if ai_person.latitude is not None and ai_person.longitude is not None:
-                    person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
-            
-            except AIPerson.DoesNotExist:
-                logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
-                person_variables = {}
+            if ai_person.latitude is not None and ai_person.longitude is not None:
+                person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
+        
+        except AIPerson.DoesNotExist:
+            logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
         except Exception as e:
-             # Fallback if aget fails or other DB error
             logger.error(f"DB Error: {e}")
-            person_variables = {}
 
+        # 변수 준비
         variables = data.get('variables', {})
         prompt_variables = {
             "user_query": user_query,
-            **person_variables,  # AI 인물 정보
+            **person_variables,
             **variables
         }
 
@@ -124,19 +114,24 @@ async def prompt_view(request, promptId=None):
             region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
         )
         
+        # Prompt ARN 결정
         if prompt_id and prompt_id.startswith('arn:'):
             prompt_identifier = prompt_id
         else:
             prompt_identifier = env_prompt_arn
 
         if not prompt_identifier:
-            logger.error("에러: 환경변수 AWS_BEDROCK_AI_PERSON을 읽지 못했습니다.")
+            logger.error("에러: 환경변수 AWS_BEDROCK_AI_PERSON_ARN을 읽지 못했습니다.")
+            return StreamingHttpResponse(
+                [sse_event({'type': 'error', 'message': 'Missing prompt ARN configuration'})],
+                content_type='text/event-stream'
+            )
 
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
         try:
-            # Prompt 가져오기 (Wrap boto3 call)
-            prompt_response = await sync_to_async(bedrock_agent.get_prompt)(
+            # Prompt 가져오기 (동기)
+            prompt_response = bedrock_agent.get_prompt(
                 promptIdentifier=prompt_identifier
             )
             
@@ -187,14 +182,14 @@ async def prompt_view(request, promptId=None):
                 
                 logger.info(f"Invoking model: {model_id}")
                 
-                # Wrap boto3 invoke
-                response = await sync_to_async(bedrock_runtime.invoke_model_with_response_stream)(
+                # Bedrock 호출 (동기)
+                response = bedrock_runtime.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body)
                 )
                 
                 return StreamingHttpResponse(
-                    async_stream_text_prompt_response(response, on_done=on_done_save_async),
+                    stream_text_prompt_response(response, on_done=on_done_callback),
                     content_type='text/event-stream'
                 )
             
@@ -209,6 +204,7 @@ async def prompt_view(request, promptId=None):
                 
                 inference_config = variant.get('inferenceConfiguration', {})
                 
+                # 메시지 포맷팅
                 formatted_messages = []
                 for msg in messages:
                     role = msg.get('role', 'user')
@@ -231,7 +227,7 @@ async def prompt_view(request, promptId=None):
                                 "content": content_text
                             })
                 
-                # user 메시지가 없거나 마지막이 user가 아니면 추가
+                # user 메시지 확인 및 추가
                 if not formatted_messages or formatted_messages[-1].get('role') != 'user':
                     formatted_messages.append({
                         "role": "user",
@@ -267,14 +263,14 @@ async def prompt_view(request, promptId=None):
                 
                 logger.info(f"Invoking model: {model_id}")
                 
-                 # Wrap boto3 invoke
-                response = await sync_to_async(bedrock_runtime.invoke_model_with_response_stream)(
+                # Bedrock 호출 (동기)
+                response = bedrock_runtime.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body)
                 )
                 
                 return StreamingHttpResponse(
-                    async_stream_chat_prompt_response(response, on_done=on_done_save_async),
+                    stream_chat_prompt_response(response, on_done=on_done_callback),
                     content_type='text/event-stream'
                 )
             
@@ -298,58 +294,16 @@ async def prompt_view(request, promptId=None):
             content_type='text/event-stream'
         )
 
-async def async_stream_chat_prompt_response(response, on_done=None):
-    """CHAT 템플릿 스트리밍 응답 (Async)"""
+
+def stream_chat_prompt_response(response, on_done=None):
+    """CHAT 템플릿 스트리밍 응답 (완전 동기)"""
     full_text = ""
     
     stream = response['body']
-    # Create an iterator from the stream
-    iterator = iter(stream)
-
-    try:
-        while True:
-            # Use sync_to_async to fetch the next chunk without blocking the loop
-            event = await sync_to_async(safe_next)(iterator)
-            if event is None:
-                break
-            
-            chunk = json.loads(event['chunk']['bytes'])
-            
-            if chunk['type'] == 'content_block_delta':
-                text = chunk['delta'].get('text', '')
-                if text:
-                    full_text += text
-                    # yield is native async generator yield
-                    yield sse_event({'type': 'content', 'text': text})
-            
-            elif chunk['type'] == 'message_stop':
-                logger.info(f"Message stop received")
-        
-        logger.info(f"Stream complete. Total text length: {len(full_text)}")
-        
-        if callable(on_done):
-            await on_done(full_text)
-        
-        yield sse_event({'type': 'done', 'total_length': len(full_text)})
-        
-    except Exception as e:
-        logger.error(f"Streaming error: {str(e)}")
-        yield sse_event({'type': 'error', 'message': str(e)})
-
-
-async def async_stream_text_prompt_response(response, on_done=None):
-    """TEXT 템플릿 스트리밍 응답 (Async)"""
-    full_text = ""
-    
-    stream = response['body']
-    iterator = iter(stream)
     
     try:
-        while True:
-            event = await sync_to_async(safe_next)(iterator)
-            if event is None:
-                break
-
+        # boto3 iterator를 그대로 사용
+        for event in stream:
             chunk = json.loads(event['chunk']['bytes'])
             
             if chunk['type'] == 'content_block_delta':
@@ -360,25 +314,61 @@ async def async_stream_text_prompt_response(response, on_done=None):
             
             elif chunk['type'] == 'message_stop':
                 logger.info(f"Message stop received")
+                break
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
         
+        # 완료 콜백 실행
         if callable(on_done):
-            await on_done(full_text)
+            on_done(full_text)
         
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+
+
+def stream_text_prompt_response(response, on_done=None):
+    """TEXT 템플릿 스트리밍 응답 (완전 동기)"""
+    full_text = ""
+    
+    stream = response['body']
+    
+    try:
+        # boto3 iterator를 그대로 사용
+        for event in stream:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
+                    yield sse_event({'type': 'content', 'text': text})
+            
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+                break
         
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
         
+        # 완료 콜백 실행
+        if callable(on_done):
+            on_done(full_text)
         
-# TTS
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}")
+        yield sse_event({'type': 'error', 'message': str(e)})
+
+
+# TTS (이미 동기이므로 변경 없음)
 class TTSSerializer(serializers.Serializer):
     text = serializers.CharField(help_text="bedrock이 생성한 전체 답변 텍스트")     
     promptId = serializers.CharField(help_text="인물의 고유 ID (목소리 매핑용)")
       
+
 @extend_schema(
     summary="AI 답변 TTS 변환",
     request=TTSSerializer,
@@ -398,27 +388,23 @@ def tts_view(request):
             return JsonResponse({'error': 'No text provided'}, status=400)
 
         # 2. DB에서 인물의 목소리 ID 찾기
-        # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
         voice_id = 'Seoyeon'
         
         if prompt_id:
             try:
-                # DB 조회
                 person = AIPerson.objects.get(promptId=prompt_id)
                 if person.voiceId:
                     voice_id = person.voiceId
-                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: 카리나")
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
             except AIPerson.DoesNotExist:
                 logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
 
         # 3. Amazon Polly를 통해 파일 생성
-        # 이전에 바꾼 tts.py의 generate_tts_file(text, voice_id) 호출
         file_path = generate_tts_file(text, voice_id=voice_id)
 
         if file_path and os.path.exists(file_path):
-            # 4. 파일 스트리밍 응답 (전송 후 브라우저에서 바로 재생 가능)
+            # 4. 파일 스트리밍 응답
             response = FileResponse(open(file_path, 'rb'), content_type='audio/wav')
-            # 파일명에 voice_id를 포함시켜 어떤 목소리인지 알기 쉽게 함
             response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
             return response
         else:
