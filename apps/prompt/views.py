@@ -5,6 +5,8 @@ import boto3
 from django.http import StreamingHttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+
+# Bedrock 관련 공통 모듈
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
@@ -333,9 +335,9 @@ class TTSSerializer(serializers.Serializer):
       
 
 @extend_schema(
-    summary="AI 답변 TTS 변환",
+    summary="AI 답변 TTS 변환(Amazon Polly 사용)",
     request=TTSSerializer,
-    description="Bedrock이 생성한 답변 텍스트를 해당 인물의 목소리로 변환합니다.",
+    description="Amazon Polly를 사용하여 답변 텍스트를 음성으로 변환합니다.",
     responses={200: OpenApiTypes.BINARY},
 )   
 @csrf_exempt
@@ -353,14 +355,27 @@ def tts_view(request):
         # 2. DB에서 인물의 목소리 ID 찾기
         voice_id = 'Seoyeon'
         
+        ssml_text = f"<speak><prosody pitch='-5%' rate='85%'>{text}</prosody></speak>"
+
+        polly_client = boto3.client('polly', region_name='ap-northeast-2')
+        
+        response = polly_client.synthesize_speech(
+            Text=ssml_text,
+            TextType='ssml',  # ← 이 부분이 중요합니다!
+            OutputFormat='mp3',
+            VoiceId=voice_id,
+            Engine='standard'
+        )
+        
         if prompt_id:
             try:
                 person = AIPerson.objects.get(promptId=prompt_id)
                 if person.voiceId:
                     voice_id = person.voiceId
                 logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
             except AIPerson.DoesNotExist:
-                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리를 사용합니다.")
 
         # 3. Amazon Polly를 통해 파일 생성
         file_path = generate_tts_file(text, voice_id=voice_id)
@@ -371,8 +386,8 @@ def tts_view(request):
             response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
             return response
         else:
-            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
+            return JsonResponse({'error': 'Polly AudioStream 생성 실패'}, status=500)
 
     except Exception as e:
-        logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
-        return JsonResponse({'error': 'Internal Server Error'}, status=500)
+        logger.error(f"Polly TTS 생성 중 예외 발생: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
