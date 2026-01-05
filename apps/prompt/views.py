@@ -284,8 +284,8 @@ def prompt_view(request, promptId=None):
             content_type='text/event-stream'
         )
 
-def stream_text_prompt_response(response, on_done=None):
-    """TEXT 템플릿 스트리밍 응답"""
+def stream_chat_prompt_response(response, on_done=None):
+    """CHAT 템플릿 스트리밍 응답 - Knowledge Base 스타일"""
     full_text = ""
     
     try:
@@ -297,7 +297,6 @@ def stream_text_prompt_response(response, on_done=None):
                 if text:
                     full_text += text
                     yield sse_event({'type': 'content', 'text': text})
-                    logger.info(f"Sent text chunk: {text[:30]}...")
             
             elif chunk['type'] == 'message_stop':
                 logger.info(f"Message stop received")
@@ -313,11 +312,10 @@ def stream_text_prompt_response(response, on_done=None):
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
 
-def stream_chat_prompt_response(response, on_done=None):
-    """CHAT 템플릿 스트리밍 응답 (버퍼링)"""
+
+def stream_text_prompt_response(response, on_done=None):
+    """TEXT 템플릿 스트리밍 응답 - Knowledge Base 스타일"""
     full_text = ""
-    buffer = ""
-    buffer_size = 10
     
     try:
         for event in response['body']:
@@ -327,19 +325,10 @@ def stream_chat_prompt_response(response, on_done=None):
                 text = chunk['delta'].get('text', '')
                 if text:
                     full_text += text
-                    buffer += text
-                    if len(buffer) >= buffer_size:
-                        yield sse_event({'type': 'content', 'text': buffer})
-                        logger.info(f"Sent text chunk: {buffer[:30]}...")
-                        buffer = ""
+                    yield sse_event({'type': 'content', 'text': text})
             
             elif chunk['type'] == 'message_stop':
                 logger.info(f"Message stop received")
-        
-        # 남은 버퍼 전송
-        if buffer:
-            yield sse_event({'type': 'content', 'text': buffer})
-            logger.info(f"Sent final buffer: {buffer[:30]}...")
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
         
@@ -351,6 +340,7 @@ def stream_chat_prompt_response(response, on_done=None):
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+        
         
         
 # TTS
