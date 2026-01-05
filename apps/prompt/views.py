@@ -26,6 +26,7 @@ from apps.prompt.dto import MessageDTO
 logger = logging.getLogger(__name__)
 
 from apps.prompt.models import AIPerson
+from common.moderation.service import check as moderation_check
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -61,11 +62,25 @@ def prompt_view(request, promptId=None):
                 [sse_event({'type': 'error', 'message': 'Invalid userId'})],
                 content_type='text/event-stream'
             )
+        
+        mr = moderation_check(str(user_id), user_query)
 
+        if not mr.allowed:
+            def blocked_stream():
+                yield sse_event({
+                    "type": "moderation",
+                    "event": "blocked",
+                    "notice": mr.notice,
+                    "muteSecondsLeft": mr.mute_seconds_left,
+                })
+                yield sse_event({"type": "done"})
+            return StreamingHttpResponse(blocked_stream(), content_type='text/event-stream')
+
+        final_user_query = mr.content or user_query
         redis_repo = RedisChatRepository()
         history_key = redis_repo.build_aiperson_key(prompt_id, user_id)
 
-        user_msg = MessageDTO.user(user_query)
+        user_msg = MessageDTO.user(final_user_query)
 
         def on_done_save(full_response: str):
             try:
@@ -73,7 +88,7 @@ def prompt_view(request, promptId=None):
                 redis_repo.append_message(history_key, user_msg)
                 redis_repo.append_message(history_key, assistant_msg)
                 logger.info("Saved chat history key=%s (user_len=%s, assistant_len=%s)",
-                            history_key, len(user_query), len(full_response))
+                            history_key, len(final_user_query), len(full_response))
             except Exception as e:
                 logger.error("Redis save failed: %s", str(e))
     
@@ -99,7 +114,7 @@ def prompt_view(request, promptId=None):
 
         variables = data.get('variables', {})
         prompt_variables = {
-            "user_query": user_query,
+            "user_query": final_user_query,
             **person_variables,  # AI 인물 정보
             **variables
         }
@@ -180,10 +195,21 @@ def prompt_view(request, promptId=None):
                     body=json.dumps(body)
                 )
                 
-                return StreamingHttpResponse(
-                    stream_text_prompt_response(response, on_done=on_done_save),
-                    content_type='text/event-stream'
-                )
+                # return StreamingHttpResponse(
+                #     stream_text_prompt_response(response, on_done=on_done_save),
+                #     content_type='text/event-stream'
+                # )
+                def combined_stream():
+                    if mr.notice:
+                        yield sse_event({
+                            "type": "moderation",
+                            "event": "warning",
+                            "notice": mr.notice
+                        })
+                    yield from stream_text_prompt_response(response, on_done=on_done_save)
+
+                return StreamingHttpResponse(combined_stream(), content_type='text/event-stream')
+
             
             # CHAT 템플릿 처리
             elif template_type == 'CHAT':
@@ -222,10 +248,10 @@ def prompt_view(request, promptId=None):
                 if not formatted_messages or formatted_messages[-1].get('role') != 'user':
                     formatted_messages.append({
                         "role": "user",
-                        "content": user_query
+                        "content": final_user_query
                     })
                 elif formatted_messages and not formatted_messages[0].get('content', '').strip():
-                    formatted_messages[0]['content'] = user_query
+                    formatted_messages[0]['content'] = final_user_query
                 
                 logger.info(f"Formatted {len(formatted_messages)} messages")
                 
@@ -259,11 +285,21 @@ def prompt_view(request, promptId=None):
                     body=json.dumps(body)
                 )
                 
-                return StreamingHttpResponse(
-                    stream_chat_prompt_response(response, on_done=on_done_save),
-                    content_type='text/event-stream'
-                )
-            
+                # return StreamingHttpResponse(
+                #     stream_chat_prompt_response(response, on_done=on_done_save),
+                #     content_type='text/event-stream'
+                # )
+                def combined_stream():
+                    if mr.notice:
+                        yield sse_event({
+                            "type": "moderation",
+                            "event": "warning",
+                            "notice": mr.notice
+                        })
+                    yield from stream_text_prompt_response(response, on_done=on_done_save)
+
+                return StreamingHttpResponse(combined_stream(), content_type='text/event-stream')
+
             else:
                 raise ValueError(f"Unsupported template type: {template_type}")
         
