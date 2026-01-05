@@ -5,6 +5,7 @@ import boto3
 from django.http import StreamingHttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+from asgiref.sync import sync_to_async
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
@@ -27,9 +28,15 @@ logger = logging.getLogger(__name__)
 
 from apps.prompt.models import AIPerson
 
+def safe_next(iterator):
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None
+
 @csrf_exempt
 @require_http_methods(["POST"])
-def prompt_view(request, promptId=None):
+async def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - body에서 모든 파라미터 받음"""
     env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')  # ARN 뒤에 _ARN 추가!
     
@@ -67,34 +74,41 @@ def prompt_view(request, promptId=None):
 
         user_msg = MessageDTO.user(user_query)
 
-        def on_done_save(full_response: str):
+        async def on_done_save_async(full_response: str):
             try:
                 assistant_msg = MessageDTO.assistant(full_response)
-                redis_repo.append_message(history_key, user_msg)
-                redis_repo.append_message(history_key, assistant_msg)
+                # Redis operations wrapped in sync_to_async
+                await sync_to_async(redis_repo.append_message)(history_key, user_msg)
+                await sync_to_async(redis_repo.append_message)(history_key, assistant_msg)
                 logger.info("Saved chat history key=%s (user_len=%s, assistant_len=%s)",
                             history_key, len(user_query), len(full_response))
             except Exception as e:
                 logger.error("Redis save failed: %s", str(e))
     
         try:
-            ai_person = AIPerson.objects.get(promptId=prompt_id)
-            logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
+            # Use aget for async ORM lookup
+            try:
+                ai_person = await AIPerson.objects.aget(promptId=prompt_id)
+                logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
 
-            person_variables = {
-                'name': ai_person.name,
-                'era': ai_person.era,
-                'summary': ai_person.summary or '',
-                'year': str(ai_person.year) if ai_person.year else '',
-                'greeting_message': ai_person.greetingMessage or '',
-                'ex_question': ai_person.exQuestion or '',
-            }
+                person_variables = {
+                    'name': ai_person.name,
+                    'era': ai_person.era,
+                    'summary': ai_person.summary or '',
+                    'year': str(ai_person.year) if ai_person.year else '',
+                    'greeting_message': ai_person.greetingMessage or '',
+                    'ex_question': ai_person.exQuestion or '',
+                }
 
-            if ai_person.latitude is not None and ai_person.longitude is not None:
-                person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
-
-        except AIPerson.DoesNotExist:
-            logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
+                if ai_person.latitude is not None and ai_person.longitude is not None:
+                    person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
+            
+            except AIPerson.DoesNotExist:
+                logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
+                person_variables = {}
+        except Exception as e:
+             # Fallback if aget fails or other DB error
+            logger.error(f"DB Error: {e}")
             person_variables = {}
 
         variables = data.get('variables', {})
@@ -123,8 +137,8 @@ def prompt_view(request, promptId=None):
         logger.info(f"Using Prompt ARN: {prompt_identifier}")
         
         try:
-            # Prompt 가져오기
-            prompt_response = bedrock_agent.get_prompt(
+            # Prompt 가져오기 (Wrap boto3 call)
+            prompt_response = await sync_to_async(bedrock_agent.get_prompt)(
                 promptIdentifier=prompt_identifier
             )
             
@@ -175,17 +189,14 @@ def prompt_view(request, promptId=None):
                 
                 logger.info(f"Invoking model: {model_id}")
                 
-                response = bedrock_runtime.invoke_model_with_response_stream(
+                # Wrap boto3 invoke
+                response = await sync_to_async(bedrock_runtime.invoke_model_with_response_stream)(
                     modelId=model_id,
                     body=json.dumps(body)
                 )
-                def test_stream():
-                    yield sse_event({'type': 'content', 'text': '테스트 '})
-                    yield sse_event({'type': 'content', 'text': '메시지'})
-                    yield sse_event({'type': 'done'})
                 
                 return StreamingHttpResponse(
-                    test_stream(),
+                    async_stream_text_prompt_response(response, on_done=on_done_save_async),
                     content_type='text/event-stream'
                 )
             
@@ -258,13 +269,14 @@ def prompt_view(request, promptId=None):
                 
                 logger.info(f"Invoking model: {model_id}")
                 
-                response = bedrock_runtime.invoke_model_with_response_stream(
+                 # Wrap boto3 invoke
+                response = await sync_to_async(bedrock_runtime.invoke_model_with_response_stream)(
                     modelId=model_id,
                     body=json.dumps(body)
                 )
                 
                 return StreamingHttpResponse(
-                    stream_chat_prompt_response(response, on_done=on_done_save),
+                    async_stream_chat_prompt_response(response, on_done=on_done_save_async),
                     content_type='text/event-stream'
                 )
             
@@ -288,18 +300,28 @@ def prompt_view(request, promptId=None):
             content_type='text/event-stream'
         )
 
-def stream_chat_prompt_response(response, on_done=None):
-    """CHAT 템플릿 스트리밍 응답 - Knowledge Base 스타일"""
+async def async_stream_chat_prompt_response(response, on_done=None):
+    """CHAT 템플릿 스트리밍 응답 (Async)"""
     full_text = ""
     
+    stream = response['body']
+    # Create an iterator from the stream
+    iterator = iter(stream)
+
     try:
-        for event in response['body']:
+        while True:
+            # Use sync_to_async to fetch the next chunk without blocking the loop
+            event = await sync_to_async(safe_next)(iterator)
+            if event is None:
+                break
+            
             chunk = json.loads(event['chunk']['bytes'])
             
             if chunk['type'] == 'content_block_delta':
                 text = chunk['delta'].get('text', '')
                 if text:
                     full_text += text
+                    # yield is native async generator yield
                     yield sse_event({'type': 'content', 'text': text})
             
             elif chunk['type'] == 'message_stop':
@@ -308,7 +330,7 @@ def stream_chat_prompt_response(response, on_done=None):
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
         
         if callable(on_done):
-            on_done(full_text)
+            await on_done(full_text)
         
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
@@ -317,12 +339,19 @@ def stream_chat_prompt_response(response, on_done=None):
         yield sse_event({'type': 'error', 'message': str(e)})
 
 
-def stream_text_prompt_response(response, on_done=None):
-    """TEXT 템플릿 스트리밍 응답 - Knowledge Base 스타일"""
+async def async_stream_text_prompt_response(response, on_done=None):
+    """TEXT 템플릿 스트리밍 응답 (Async)"""
     full_text = ""
     
+    stream = response['body']
+    iterator = iter(stream)
+    
     try:
-        for event in response['body']:
+        while True:
+            event = await sync_to_async(safe_next)(iterator)
+            if event is None:
+                break
+
             chunk = json.loads(event['chunk']['bytes'])
             
             if chunk['type'] == 'content_block_delta':
@@ -337,7 +366,7 @@ def stream_text_prompt_response(response, on_done=None):
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
         
         if callable(on_done):
-            on_done(full_text)
+            await on_done(full_text)
         
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
