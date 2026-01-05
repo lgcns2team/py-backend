@@ -2,13 +2,16 @@ import json
 import logging
 import os
 import boto3
+from uuid import UUID
 from django.http import StreamingHttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-
-# Bedrock 관련 공통 모듈
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
+
+# Redis 채팅 히스토리
+from apps.prompt.redis_chat_repository import RedisChatRepository
+from apps.prompt.dto import MessageDTO
 
 # TTS 관련
 from drf_spectacular.utils import extend_schema, OpenApiTypes
@@ -55,7 +58,31 @@ def prompt_view(request, promptId=None):
                 'message': 'Missing userId in body'
             }, status=400)
 
+        # userId를 UUID로 변환
+        try:
+            user_id_uuid = UUID(user_id)
+        except ValueError:
+            return JsonResponse({
+                'type': 'error',
+                'message': 'Invalid userId format'
+            }, status=400)
+
         logger.info(f"AI 인물 채팅 요청 - promptId: {prompt_id}, query: {user_query[:50]}...")
+
+        # Redis 히스토리 설정
+        redis_repo = RedisChatRepository()
+        history_key = redis_repo.build_aiperson_key(prompt_id, user_id_uuid)
+        user_msg = MessageDTO.user(user_query)
+
+        # 스트리밍 완료 시 Redis 저장 콜백
+        def on_done_save(full_response: str):
+            try:
+                assistant_msg = MessageDTO.assistant(full_response)
+                redis_repo.append_message(history_key, user_msg)
+                redis_repo.append_message(history_key, assistant_msg)
+                logger.info(f"[REDIS SAVE] Saved chat history, key={history_key}, response_length={len(full_response)}")
+            except Exception as e:
+                logger.error(f"[REDIS SAVE] Failed: {str(e)}")
 
         # AI Person 정보 가져오기
         person_variables = {}
@@ -170,7 +197,7 @@ def prompt_view(request, promptId=None):
             )
             
             return StreamingHttpResponse(
-                stream_text_prompt_response(response),
+                stream_text_prompt_response(response, on_done=on_done_save),
                 content_type='text/event-stream'
             )
         
@@ -251,7 +278,7 @@ def prompt_view(request, promptId=None):
             )
             
             return StreamingHttpResponse(
-                stream_chat_prompt_response(response),
+                stream_chat_prompt_response(response, on_done=on_done_save),
                 content_type='text/event-stream'
             )
         
@@ -273,7 +300,7 @@ def prompt_view(request, promptId=None):
         }, status=500)
 
 
-def stream_chat_prompt_response(response):
+def stream_chat_prompt_response(response, on_done=None):
     """CHAT 템플릿 스트리밍 응답"""
     full_text = ""
     
@@ -292,6 +319,11 @@ def stream_chat_prompt_response(response):
                 break
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        
+        # Redis 저장 콜백 실행
+        if callable(on_done):
+            on_done(full_text)
+        
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
@@ -299,7 +331,7 @@ def stream_chat_prompt_response(response):
         yield sse_event({'type': 'error', 'message': str(e)})
 
 
-def stream_text_prompt_response(response):
+def stream_text_prompt_response(response, on_done=None):
     """TEXT 템플릿 스트리밍 응답"""
     full_text = ""
     
@@ -318,6 +350,11 @@ def stream_text_prompt_response(response):
                 break
         
         logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        
+        # Redis 저장 콜백 실행
+        if callable(on_done):
+            on_done(full_text)
+        
         yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
@@ -335,9 +372,9 @@ class TTSSerializer(serializers.Serializer):
       
 
 @extend_schema(
-    summary="AI 답변 TTS 변환(Amazon Polly 사용)",
+    summary="AI 답변 TTS 변환",
     request=TTSSerializer,
-    description="Amazon Polly를 사용하여 답변 텍스트를 음성으로 변환합니다.",
+    description="Bedrock이 생성한 답변 텍스트를 해당 인물의 목소리로 변환합니다.",
     responses={200: OpenApiTypes.BINARY},
 )   
 @csrf_exempt
@@ -355,27 +392,14 @@ def tts_view(request):
         # 2. DB에서 인물의 목소리 ID 찾기
         voice_id = 'Seoyeon'
         
-        ssml_text = f"<speak><prosody pitch='-5%' rate='85%'>{text}</prosody></speak>"
-
-        polly_client = boto3.client('polly', region_name='ap-northeast-2')
-        
-        response = polly_client.synthesize_speech(
-            Text=ssml_text,
-            TextType='ssml',  # ← 이 부분이 중요합니다!
-            OutputFormat='mp3',
-            VoiceId=voice_id,
-            Engine='standard'
-        )
-        
         if prompt_id:
             try:
                 person = AIPerson.objects.get(promptId=prompt_id)
                 if person.voiceId:
                     voice_id = person.voiceId
                 logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
-                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
             except AIPerson.DoesNotExist:
-                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리를 사용합니다.")
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
 
         # 3. Amazon Polly를 통해 파일 생성
         file_path = generate_tts_file(text, voice_id=voice_id)
@@ -386,8 +410,8 @@ def tts_view(request):
             response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
             return response
         else:
-            return JsonResponse({'error': 'Polly AudioStream 생성 실패'}, status=500)
+            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
 
     except Exception as e:
-        logger.error(f"Polly TTS 생성 중 예외 발생: {str(e)}")
-        return JsonResponse({'error': str(e)}, status=500)
+        logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
+        return JsonResponse({'error': 'Internal Server Error'}, status=500)
