@@ -30,17 +30,16 @@ from apps.prompt.models import AIPerson
 @csrf_exempt
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
-    """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
-    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+    """Bedrock Prompt 호출 (스트리밍) - body에서 모든 파라미터 받음"""
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')  # ARN 뒤에 _ARN 추가!
     
     try:
         data = json.loads(request.body)
         
-        # promptId는 URL에서, user_query는 body에서
-        prompt_id = promptId or data.get('prompt_id')
+        # 모두 body에서 받음 (URL은 fallback)
+        prompt_id = data.get('promptId') or promptId
         user_query = data.get('message') or data.get('user_query')
-        
-        user_id = request.GET.get("userId")
+        user_id = data.get('userId')  # ⭐ body에서 받음 (query 아님!)
 
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
@@ -50,7 +49,7 @@ def prompt_view(request, promptId=None):
         
         if not user_id:
             return StreamingHttpResponse(
-                [sse_event({"type": "error", "message": "Missing userId in query param"})],
+                [sse_event({"type": "error", "message": "Missing userId in body"})],  # ⭐ 메시지 수정
                 content_type="text/event-stream",
             )
         
@@ -61,6 +60,7 @@ def prompt_view(request, promptId=None):
                 [sse_event({'type': 'error', 'message': 'Invalid userId'})],
                 content_type='text/event-stream'
             )
+
 
         redis_repo = RedisChatRepository()
         history_key = redis_repo.build_aiperson_key(prompt_id, user_id)
