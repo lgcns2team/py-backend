@@ -18,7 +18,7 @@ from drf_spectacular.utils import extend_schema, OpenApiTypes
 from rest_framework.decorators import api_view
 from rest_framework import serializers
 from django.http import FileResponse
-# from apps.tools.tts import generate_tts_file
+# from apps.tools.tts import generate_tts_file  # TTS 모듈 없음
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +382,8 @@ class TTSSerializer(serializers.Serializer):
 def tts_view(request):
     """Bedrock의 최종 응답을 음성으로 변환"""
     try:
+        from contextlib import closing
+        
         # 1. 요청 데이터 파싱 
         text = request.data.get('text', '')
         prompt_id = request.data.get('promptId')
@@ -401,17 +403,35 @@ def tts_view(request):
             except AIPerson.DoesNotExist:
                 logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
 
-        # 3. Amazon Polly를 통해 파일 생성
-        file_path = generate_tts_file(text, voice_id=voice_id)
-
-        if file_path and os.path.exists(file_path):
-            # 4. 파일 스트리밍 응답
-            response = FileResponse(open(file_path, 'rb'), content_type='audio/wav')
-            response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
-            return response
+        # 3. Amazon Polly를 통해 음성 생성
+        polly_client = boto3.client(
+            service_name='polly',
+            region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
+        )
+        
+        # SSML 텍스트 (음성 속도 및 톤 조절)
+        ssml_text = f"<speak><prosody pitch='-5%' rate='85%'>{text}</prosody></speak>"
+        
+        response = polly_client.synthesize_speech(
+            Text=ssml_text,
+            TextType='ssml',
+            OutputFormat='mp3',
+            VoiceId=voice_id,
+            Engine='standard'
+        )
+        
+        if "AudioStream" in response:
+            # 스트리밍 응답
+            def stream_audio():
+                with closing(response["AudioStream"]) as stream:
+                    yield from stream
+            
+            res = StreamingHttpResponse(stream_audio(), content_type='audio/mpeg')
+            res['Content-Disposition'] = f'inline; filename="response_{voice_id}.mp3"'
+            return res
         else:
-            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
+            return JsonResponse({'error': 'Polly AudioStream 생성 실패'}, status=500)
 
     except Exception as e:
         logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
-        return JsonResponse({'error': 'Internal Server Error'}, status=500)
+        return JsonResponse({'error': str(e)}, status=500)
