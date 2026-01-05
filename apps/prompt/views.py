@@ -3,8 +3,6 @@ import logging
 import os
 import boto3
 from django.http import StreamingHttpResponse, HttpResponseNotAllowed
-from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_exempt
 from asgiref.sync import sync_to_async
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
@@ -34,7 +32,6 @@ def safe_next(iterator):
     except StopIteration:
         return None
 
-@csrf_exempt
 async def prompt_view(request, promptId=None):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
