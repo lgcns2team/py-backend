@@ -179,9 +179,13 @@ def prompt_view(request, promptId=None):
                     modelId=model_id,
                     body=json.dumps(body)
                 )
+                def test_stream():
+                    yield sse_event({'type': 'content', 'text': '테스트 '})
+                    yield sse_event({'type': 'content', 'text': '메시지'})
+                    yield sse_event({'type': 'done'})
                 
                 return StreamingHttpResponse(
-                    stream_text_prompt_response(response, on_done=on_done_save),
+                    test_stream(),
                     content_type='text/event-stream'
                 )
             
