@@ -2,24 +2,24 @@ import json
 import logging
 import os
 import boto3
-from django.http import StreamingHttpResponse
+from uuid import UUID
+from contextlib import closing
+
+from django.http import StreamingHttpResponse, JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+
+# Bedrock 관련 공통 모듈
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
 
-
-# apps/prompt/views.py 상단에 추가
+# API 문서화 및 REST 프레임워크 관련
 from drf_spectacular.utils import extend_schema, OpenApiTypes
 from rest_framework.decorators import api_view
 from rest_framework import serializers
-from django.http import JsonResponse, FileResponse
-from django.shortcuts import get_object_or_404
-from apps.tools.tts import generate_tts_file
-logger = logging.getLogger(__name__)
 
-# from apps.prompt.redis_repo import RedisChatRepository, MessageDTO
-from uuid import UUID
+# 모델 및 레포지토리
+from apps.prompt.models import AIPerson
 from apps.prompt.redis_chat_repository import RedisChatRepository
 from apps.prompt.dto import MessageDTO
 
@@ -409,15 +409,6 @@ def tts_view(request):
             region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
         )
 
-        # 3. 음성 합성 요청 (Neural 엔진 사용으로 퀄리티 향상)
-        # response = polly_client.synthesize_speech(
-        #     Text=text,
-        #     OutputFormat='mp3', # 브라우저 호환성이 가장 좋은 mp3 사용
-        #     VoiceId=voice_id,
-        #     Engine='neural'     # 'standard'보다 훨씬 자연스러운 목소리
-        # )
-
-        # 4. Polly의 AudioStream을 즉시 스트리밍 응답
         if "AudioStream" in response:
             # StreamingHttpResponse는 제너레이터를 인자로 받아 데이터를 조각조각 보냅니다.
             def stream_audio():
