@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import boto3
-from django.http import StreamingHttpResponse
+from django.http import StreamingHttpResponse, HttpResponseNotAllowed
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from asgiref.sync import sync_to_async
@@ -35,8 +35,9 @@ def safe_next(iterator):
         return None
 
 @csrf_exempt
-@require_http_methods(["POST"])
 async def prompt_view(request, promptId=None):
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
     """Bedrock Prompt 호출 (스트리밍) - body에서 모든 파라미터 받음"""
     env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')  # ARN 뒤에 _ARN 추가!
     
