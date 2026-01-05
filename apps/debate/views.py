@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 import boto3
 from django.http import StreamingHttpResponse, JsonResponse
 from django.views.decorators.http import require_http_methods
@@ -161,7 +162,7 @@ def debate_summary(request, room_id: str):
             status=500,
             json_dumps_params={"ensure_ascii": False},
         )
-        
+    
 @csrf_exempt
 @require_http_methods(["POST"])
 def recommend_debate_topics(request):
