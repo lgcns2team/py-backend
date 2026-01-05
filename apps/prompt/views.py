@@ -18,7 +18,7 @@ from drf_spectacular.utils import extend_schema, OpenApiTypes
 from rest_framework.decorators import api_view
 from rest_framework import serializers
 from django.http import FileResponse
-from apps.tools.tts import generate_tts_file
+# from apps.tools.tts import generate_tts_file
 
 logger = logging.getLogger(__name__)
 
