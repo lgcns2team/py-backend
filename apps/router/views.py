@@ -1,84 +1,256 @@
-"""
-Agent Chat Router Views
-Tool Calling과 Knowledge Base 검색을 통합하는 라우터
-"""
 import json
 import logging
 import os
-from django.http import JsonResponse, StreamingHttpResponse
+import boto3
+from django.http import StreamingHttpResponse, HttpResponseNotAllowed, JsonResponse, FileResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-
-from common.bedrock.converse import ConverseClient
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
-from apps.tools.definitions import TOOL_CONFIG, ROUTER_SYSTEM_PROMPT
-from apps.tools.handlers import handle_tool_result
 
 logger = logging.getLogger(__name__)
+
+from apps.prompt.models import AIPerson
+
+# TTS 관련 import 추가
+from apps.tools.tts import generate_tts_file
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def agent_chat_view(request):
+def prompt_view(request, promptId=None):
     """
-    Agent Router: Tool Calling 또는 Knowledge Base 검색으로 라우팅
+    AI 인물 채팅 엔드포인트
     
     Request:
-        {"message": "이순신한테 말걸어줘"} - Tool Call 트리거
-        {"message": "조선시대 경제는?"} - Knowledge Base 검색
+        {"promptId": "RMIWXQRE2U", "message": "안녕하세요", "userId": "uuid"}
     
-    Response (Tool Call):
-        {"type": "tool_call", "action": "navigate_to_person", "input": {"person_name": "이순신"}}
-    
-    Response (Knowledge Base):
+    Response:
         SSE 스트리밍 응답
     """
     try:
         data = json.loads(request.body)
-        query = data.get('message') or data.get('query')
         
-        if not query:
+        # 파라미터 추출
+        prompt_id = data.get('promptId') or promptId
+        user_query = data.get('message') or data.get('user_query')
+        user_id = data.get('userId')
+
+        # 필수 파라미터 검증
+        if not prompt_id or not user_query:
             return JsonResponse({
                 'type': 'error',
-                'message': 'Missing required field: message'
+                'message': 'Missing prompt_id or message'
             }, status=400)
         
-        logger.info(f"Agent Chat 요청: {query[:50]}...")
+        if not user_id:
+            return JsonResponse({
+                'type': 'error',
+                'message': 'Missing userId in body'
+            }, status=400)
+
+        logger.info(f"AI 인물 채팅 요청 - promptId: {prompt_id}, query: {user_query[:50]}...")
+
+        # AI Person 정보 가져오기
+        person_variables = {}
+        try:
+            ai_person = AIPerson.objects.get(promptId=prompt_id)
+            logger.info(f"Found AI Person: {ai_person.name} from {ai_person.era}")
+
+            person_variables = {
+                'name': ai_person.name,
+                'era': ai_person.era,
+                'summary': ai_person.summary or '',
+                'year': str(ai_person.year) if ai_person.year else '',
+                'greeting_message': ai_person.greetingMessage or '',
+                'ex_question': ai_person.exQuestion or '',
+            }
+
+            if ai_person.latitude is not None and ai_person.longitude is not None:
+                person_variables['location'] = f"위도: {ai_person.latitude}, 경도: {ai_person.longitude}"
         
-        # 1단계: Converse API로 Intent Detection
-        converse_client = ConverseClient()
-        result = converse_client.invoke_with_tools(
-            messages=[{
-                "role": "user",
-                "content": [{"text": query}]
-            }],
-            tool_config=TOOL_CONFIG,
-            system=[{"text": ROUTER_SYSTEM_PROMPT}]
+        except AIPerson.DoesNotExist:
+            logger.warning(f"AI Person not found for prompt_id: {prompt_id}")
+        except Exception as e:
+            logger.error(f"DB Error: {e}")
+
+        # 변수 준비
+        variables = data.get('variables', {})
+        prompt_variables = {
+            "user_query": user_query,
+            **person_variables,
+            **variables
+        }
+
+        logger.info(f"Prompt variables: {list(prompt_variables.keys())}")
+
+        # Prompt ARN 가져오기
+        env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')
+        
+        if prompt_id and prompt_id.startswith('arn:'):
+            prompt_identifier = prompt_id
+        else:
+            prompt_identifier = env_prompt_arn
+
+        if not prompt_identifier:
+            return JsonResponse({
+                'type': 'error',
+                'message': 'AWS_BEDROCK_AI_PERSON_ARN not configured'
+            }, status=500)
+
+        logger.info(f"Using Prompt ARN: {prompt_identifier}")
+
+        # Bedrock Agent 클라이언트
+        bedrock_agent = boto3.client(
+            service_name='bedrock-agent',
+            region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
+        )
+
+        # Prompt 정보 가져오기
+        prompt_response = bedrock_agent.get_prompt(
+            promptIdentifier=prompt_identifier
         )
         
-        # 2단계: 라우팅
-        if result['type'] == 'tool_call':
-            action = result['action']
-            tool_input = result['input']
+        logger.info(f"Prompt retrieved: {prompt_response.get('name', 'Unknown')}")
+        
+        variants = prompt_response.get('variants', [])
+        if not variants:
+            raise ValueError("Prompt has no variants")
+        
+        variant = variants[0]
+        template_type = variant.get('templateType', 'TEXT')
+        
+        logger.info(f"Template type: {template_type}")
+        
+        model_id = prompt_response.get('defaultModelId', 'anthropic.claude-3-5-sonnet-20240620-v1:0')
+        
+        bedrock_runtime = BedrockClients.get_runtime()
+        
+        # TEXT 템플릿 처리
+        if template_type == 'TEXT':
+            template_config = variant.get('templateConfiguration', {})
+            template_text = template_config.get('text', {}).get('text', '')
             
-            logger.info(f"Tool Call 감지: {action}")
-
-            # [CASE A] 전쟁 툴인 경우 -> 스트리밍 (Tool + KB 답변)
-            if action == "navigate_to_war":
-                return StreamingHttpResponse(
-                    stream_war_navigation_and_kb(query, tool_input),
-                    content_type='text/event-stream'
-                )
-
-            # [CASE B] 일반 툴인 경우 -> JSON 응답
-            tool_response = handle_tool_result(action, tool_input)
-            return JsonResponse(tool_response)
-
+            # 변수 치환
+            formatted_prompt = template_text
+            for var_name, var_value in prompt_variables.items():
+                formatted_prompt = formatted_prompt.replace(f"{{{{{var_name}}}}}", str(var_value))
+            
+            logger.info(f"Formatted prompt (first 100 chars): {formatted_prompt[:100]}...")
+            
+            inference_config = variant.get('inferenceConfiguration', {})
+            
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": inference_config.get('maxTokens', 4096),
+                "temperature": inference_config.get('temperature', 1.0),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": formatted_prompt
+                    }
+                ]
+            }
+            
+            if 'stopSequences' in inference_config:
+                body['stop_sequences'] = inference_config['stopSequences']
+            
+            logger.info(f"Invoking model: {model_id}")
+            
+            # Bedrock 호출
+            response = bedrock_runtime.invoke_model_with_response_stream(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+            
+            return StreamingHttpResponse(
+                stream_text_prompt_response(response),
+                content_type='text/event-stream'
+            )
+        
+        # CHAT 템플릿 처리
+        elif template_type == 'CHAT':
+            template_config = variant.get('templateConfiguration', {})
+            chat_config = template_config.get('chat', {})
+            messages = chat_config.get('messages', [])
+            system_prompts = chat_config.get('system', [])
+            
+            logger.info(f"CHAT template - Messages: {len(messages)}, System prompts: {len(system_prompts)}")
+            
+            inference_config = variant.get('inferenceConfiguration', {})
+            
+            # 메시지 포맷팅
+            formatted_messages = []
+            for msg in messages:
+                role = msg.get('role', 'user')
+                content_blocks = msg.get('content', [])
+                
+                formatted_content = []
+                for block in content_blocks:
+                    if 'text' in block:
+                        text = block['text']
+                        for var_name, var_value in prompt_variables.items():
+                            text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                        if text.strip():
+                            formatted_content.append({"type": "text", "text": text})
+                
+                if formatted_content:
+                    content_text = " ".join([c['text'] for c in formatted_content if 'text' in c])
+                    if content_text.strip():
+                        formatted_messages.append({
+                            "role": role,
+                            "content": content_text
+                        })
+            
+            # user 메시지 확인 및 추가
+            if not formatted_messages or formatted_messages[-1].get('role') != 'user':
+                formatted_messages.append({
+                    "role": "user",
+                    "content": user_query
+                })
+            elif formatted_messages and not formatted_messages[0].get('content', '').strip():
+                formatted_messages[0]['content'] = user_query
+            
+            logger.info(f"Formatted {len(formatted_messages)} messages")
+            
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": inference_config.get('maxTokens', 4096),
+                "temperature": inference_config.get('temperature', 1.0),
+                "messages": formatted_messages
+            }
+            
+            # System prompt 처리
+            if system_prompts:
+                system_text = []
+                for sys_prompt in system_prompts:
+                    if 'text' in sys_prompt:
+                        text = sys_prompt['text']
+                        for var_name, var_value in prompt_variables.items():
+                            text = text.replace(f"{{{{{var_name}}}}}", str(var_value))
+                        system_text.append(text)
+                
+                if system_text:
+                    body['system'] = " ".join(system_text)
+            
+            if 'stopSequences' in inference_config:
+                body['stop_sequences'] = inference_config['stopSequences']
+            
+            logger.info(f"Invoking model: {model_id}")
+            
+            # Bedrock 호출
+            response = bedrock_runtime.invoke_model_with_response_stream(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+            
+            return StreamingHttpResponse(
+                stream_chat_prompt_response(response),
+                content_type='text/event-stream'
+            )
+        
         else:
-            # 일반 질문 - Knowledge Base 검색으로 Fallback
-            logger.info("Knowledge Base 검색으로 Fallback")
-            return knowledge_base_streaming_response(query)
+            raise ValueError(f"Unsupported template type: {template_type}")
             
     except json.JSONDecodeError:
         return JsonResponse({
@@ -86,7 +258,7 @@ def agent_chat_view(request):
             'message': 'Invalid JSON'
         }, status=400)
     except Exception as e:
-        logger.error(f"Agent Chat 오류: {str(e)}")
+        logger.error(f"Prompt error: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return JsonResponse({
@@ -95,114 +267,100 @@ def agent_chat_view(request):
         }, status=500)
 
 
-
-def knowledge_base_streaming_response(query: str):
-    """Knowledge Base 스트리밍 검색 응답"""
-    try:
-        kb_id = os.getenv('AWS_BEDROCK_KB_ID')
-        model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
-        
-        
-        print("model_arn", model_arn)
-        if not kb_id or not model_arn:
-            return JsonResponse({
-                'type': 'error',
-                'message': 'Knowledge Base not configured'
-            }, status=500)
-        
-
-        bedrock_agent_runtime = BedrockClients.get_agent_runtime()
-        response = bedrock_agent_runtime.retrieve_and_generate_stream(
-            input={'text': query},
-            retrieveAndGenerateConfiguration={
-                'type': 'KNOWLEDGE_BASE',
-                'knowledgeBaseConfiguration': {
-                    'knowledgeBaseId': kb_id,
-                    'modelArn': model_arn
-                }
-            }
-        )
-        
-        return StreamingHttpResponse(
-            stream_kb_response(response),
-            content_type='text/event-stream'
-        )
-        
-    except Exception as e:
-        logger.error(f"Knowledge Base 오류: {str(e)}")
-        return StreamingHttpResponse(
-            [sse_event({'type': 'error', 'message': str(e)})],
-            content_type='text/event-stream'
-        )
-    
-
-def stream_kb_response(response):
-    """Knowledge Base 스트리밍 응답 처리"""
-    citations = []
+def stream_chat_prompt_response(response):
+    """CHAT 템플릿 스트리밍 응답"""
+    full_text = ""
     
     try:
-        for event in response['stream']:
-            if 'output' in event:
-                output_data = event['output']
-                if 'text' in output_data:
-                    text = output_data['text']
+        for event in response['body']:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
                     yield sse_event({'type': 'content', 'text': text})
             
-            elif 'citation' in event:
-                citations.append(event['citation'])
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+                break
         
-        if citations:
-            yield sse_event({
-                'type': 'citations',
-                'count': len(citations),
-                'data': citations
-            })
-        
-        yield sse_event({'type': 'done'})
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
-        logger.error(f"스트리밍 오류: {str(e)}")
+        logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
 
 
-def stream_war_navigation_and_kb(query, tool_params):
-    """
-    1. 툴 호출 이벤트 전송 (navigate_to_war)
-    2. KB 검색 결과 스트리밍 전송
-    """
-    # 1. Tool Call 먼저 전송 (프론트엔드가 지도 이동 시작)
-    yield sse_event({
-        "type": "tool_call",
-        "tool_name": "navigate_to_war",
-        "parameters": {
-            "year": tool_params.get('year'),
-            "war_name": tool_params.get('war_name')
-        }
-    })
-
-    # 2. KB 검색 시작 (사용자 질문으로 답변 생성)
-    # 기존 knowledge_base_streaming_response 로직 재사용
+def stream_text_prompt_response(response):
+    """TEXT 템플릿 스트리밍 응답"""
+    full_text = ""
+    
     try:
-        kb_id = os.getenv('AWS_BEDROCK_KB_ID')
-        model_arn = os.getenv('AWS_BEDROCK_KB_MODEL_ARN')
+        for event in response['body']:
+            chunk = json.loads(event['chunk']['bytes'])
+            
+            if chunk['type'] == 'content_block_delta':
+                text = chunk['delta'].get('text', '')
+                if text:
+                    full_text += text
+                    yield sse_event({'type': 'content', 'text': text})
+            
+            elif chunk['type'] == 'message_stop':
+                logger.info(f"Message stop received")
+                break
         
-        bedrock_agent_runtime = BedrockClients.get_agent_runtime()
-        response = bedrock_agent_runtime.retrieve_and_generate_stream(
-            input={'text': query},
-            retrieveAndGenerateConfiguration={
-                'type': 'KNOWLEDGE_BASE',
-                'knowledgeBaseConfiguration': {
-                    'knowledgeBaseId': kb_id,
-                    'modelArn': model_arn
-                }
-            }
-        )
-        
-        # KB 응답 스트리밍 (stream_kb_response 재사용)
-        # 주의: stream_kb_response는 'done' 이벤트를 마지막에 보내므로, 
-        # 여기서는 그대로 yield from 해도 됩니다.
-        yield from stream_kb_response(response)
+        logger.info(f"Stream complete. Total text length: {len(full_text)}")
+        yield sse_event({'type': 'done', 'total_length': len(full_text)})
         
     except Exception as e:
-        logger.error(f"KB Stream Error: {e}")
+        logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+
+
+# ============================================
+# TTS - Django 표준 방식 (DRF 없이)
+# ============================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def tts_view(request):
+    """Bedrock의 최종 응답을 음성으로 변환"""
+    try:
+        # 1. 요청 데이터 파싱 
+        data = json.loads(request.body)
+        text = data.get('text', '')
+        prompt_id = data.get('promptId')
+        
+        if not text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
+        # 2. DB에서 인물의 목소리 ID 찾기
+        voice_id = 'Seoyeon'
+        
+        if prompt_id:
+            try:
+                person = AIPerson.objects.get(promptId=prompt_id)
+                if person.voiceId:
+                    voice_id = person.voiceId
+                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
+            except AIPerson.DoesNotExist:
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리(Seoyeon)를 사용합니다.")
+
+        # 3. Amazon Polly를 통해 파일 생성
+        file_path = generate_tts_file(text, voice_id=voice_id)
+
+        if file_path and os.path.exists(file_path):
+            # 4. 파일 스트리밍 응답
+            response = FileResponse(open(file_path, 'rb'), content_type='audio/wav')
+            response['Content-Disposition'] = f'inline; filename="response_{voice_id}.wav"'
+            return response
+        else:
+            return JsonResponse({'error': '음성 파일 생성 실패'}, status=500)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"TTS 생성 중 예외 발생: {str(e)}")
+        return JsonResponse({'error': 'Internal Server Error'}, status=500)
