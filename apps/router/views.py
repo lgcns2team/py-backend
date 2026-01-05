@@ -16,7 +16,7 @@ from apps.tools.definitions import TOOL_CONFIG, ROUTER_SYSTEM_PROMPT
 from apps.tools.handlers import handle_tool_result
 
 logger = logging.getLogger(__name__)
-from apps.tools.tts import generate_tts_file
+# from apps.tools.tts import generate_tts_file
 
 @csrf_exempt
 @require_http_methods(["POST"])
