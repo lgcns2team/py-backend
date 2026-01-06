@@ -383,7 +383,7 @@ def tts_view(request):
 
         # 2. DB에서 인물의 목소리 ID 찾기
         # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
-        voice_id = 'tc_5c3c52ca5827e00008dd7f3a'
+        voice_id = 'tc_689450bdcce4027c2f06eee8'
         
         if prompt_id:
             try:
@@ -395,45 +395,30 @@ def tts_view(request):
                 logger.warning(f"promptId {prompt_id}를 찾을 수 없습니다.")
 
         # 3. Typecast API 호출
-        typecast_api_key = os.getenv('TYPECAST_API_KEY').strip() # .env에 저장 권장
+        typecast_api_key = os.getenv('TYPECAST_API_KEY')
         url = "https://api.typecast.ai/v1/text-to-speech"
         
         headers = {
-            "Authorization": f"Bearer {typecast_api_key}",
+            "X-API-KEY": typecast_api_key,
             "Content-Type": "application/json"
         }
         
         payload = {
             "text": text,
-            "actor_id": voice_id, # voice_id 대신 actor_id 시도
-            "lang": "ko",
-            "model_version": "latest",
+            "voice_id": voice_id,
+            "language": "ko",
+            "model": "ssfm-v21",
             "output": {
                 "audio_format": "mp3"
             }
         }
 
         # 음성 생성 요청
-        response = requests.post(url, json=payload, headers=headers)
-        if response.status_code == 401:
-            # 터미널 로그를 확인하세요! (Unauthorized의 구체적인 이유가 나옵니다)
-            logger.error(f"Typecast 401 에러 상세: {response.text}")
-            return JsonResponse({'error': '인증 실패: API 키를 확인해주세요.'}, status=401)
-        if response.status_code != 200:
-            return JsonResponse({'error': f'Typecast 요청 실패: {response.text}'}, status=response.status_code)
-        result = response.json()
-        audio_url = result.get('audio_url')
-
-        if not audio_url:
-            return JsonResponse({'error': 'Audio URL을 받지 못했습니다.'}, status=500)
-
-        # 4. 생성된 오디오 URL에서 데이터를 가져와 스트리밍 응답
-        # Polly와 동일하게 바이너리 데이터를 프론트에 넘겨주기 위해 다시 fetch합니다.
-        audio_res = requests.get(audio_url, stream=True)
+        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=60)
         
-        if audio_res.status_code == 200:
+        if response.status_code == 200:
             res = StreamingHttpResponse(
-                audio_res.iter_content(chunk_size=8192), 
+                response.iter_content(chunk_size=8192), 
                 content_type='audio/mpeg'
             )
             res['Content-Disposition'] = f'inline; filename="response_{voice_id}.mp3"'
