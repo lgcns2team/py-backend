@@ -1,11 +1,13 @@
 import json
 import logging
 import os
-from django.http import StreamingHttpResponse
+import requests
+from django.http import StreamingHttpResponse, JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from common.bedrock.clients import BedrockClients
 from common.bedrock.streaming import sse_event
+from rest_framework.decorators import api_view
 
 logger = logging.getLogger(__name__)
 
@@ -97,3 +99,45 @@ def stream_knowledge_base_response(response):
     except Exception as e:
         logger.error(f"Streaming error: {str(e)}")
         yield sse_event({'type': 'error', 'message': str(e)})
+
+@csrf_exempt
+@api_view(["POST"])
+def chatbot_tts_view(request):
+    """일반 AI 챗봇 전용 TTS (DB 연동 없음)"""
+    try:
+        text = request.data.get('text', '')
+        if not text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
+        # ✅ 챗봇 전용 목소리 ID 직접 지정 (원하는 ID로 변경 가능)
+        voice_id = 'tc_630494521f5003bebbfdafef' 
+
+        typecast_api_key = os.getenv('TYPECAST_API_KEY')
+        url = "https://api.typecast.ai/v1/text-to-speech"
+        
+        headers = {
+            "X-API-KEY": typecast_api_key,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "text": text,
+            "voice_id": voice_id,
+            "language": "ko",
+            "model": "ssfm-v21",
+            "output": {"audio_format": "mp3"}
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 200:
+            return StreamingHttpResponse(
+                iter([response.content]), 
+                content_type='audio/mpeg'
+            )
+        else:
+            return JsonResponse({'error': 'Typecast 호출 실패'}, status=response.status_code)
+
+    except Exception as e:
+        logger.error(f"Chatbot TTS Error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)

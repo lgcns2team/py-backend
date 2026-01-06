@@ -381,10 +381,6 @@ def tts_view(request):
         if not text:
             return JsonResponse({'error': 'No text provided'}, status=400)
 
-        # 2. DB에서 인물의 목소리 ID 찾기
-        # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
-        voice_id = 'tc_689450bdcce4027c2f06eee8'
-        
         if prompt_id:
             try:
                 person = AIPerson.objects.get(promptId=prompt_id)
@@ -410,6 +406,10 @@ def tts_view(request):
             "model": "ssfm-v21",
             "output": {
                 "audio_format": "mp3"
+            },
+
+            "options": {
+                "pitch": -2
             }
         }
 
