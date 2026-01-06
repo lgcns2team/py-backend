@@ -44,7 +44,7 @@ def prompt_view(request, promptId=None):
         prompt_id = promptId or data.get('prompt_id')
         user_query = data.get('message') or data.get('user_query')
         
-        user_id = request.GET.get("userId")
+        user_id = request.data.get("userId")
 
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
