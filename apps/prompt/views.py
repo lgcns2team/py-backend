@@ -35,7 +35,7 @@ load_dotenv()
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
-    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')
     
     try:
         data = json.loads(request.body)
