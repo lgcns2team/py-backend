@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import boto3
+import requests
+import time
 from uuid import UUID
 from contextlib import closing
 
@@ -26,6 +28,9 @@ from apps.prompt.dto import MessageDTO
 logger = logging.getLogger(__name__)
 
 from apps.prompt.models import AIPerson
+
+from dotenv import load_dotenv
+load_dotenv()
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -359,11 +364,11 @@ class TTSSerializer(serializers.Serializer):
     promptId = serializers.CharField(help_text="인물의 고유 ID (목소리 매핑용)")
       
 @extend_schema(
-    summary="AI 답변 TTS 변환(Amazon Polly 사용)",
+    summary="AI 답변 TTS 변환(Typecast 사용)",
     request=TTSSerializer,
-    description="Amazon Polly를 사용하여 답변 텍스트를 음성으로 변환합니다.",
+    description="Typecast API를 사용하여 답변 텍스트를 고품질 음성으로 변환합니다.",
     responses={200: OpenApiTypes.BINARY},
-)   
+) 
 @csrf_exempt
 @api_view(["POST"]) 
 def tts_view(request):
@@ -376,51 +381,51 @@ def tts_view(request):
         if not text:
             return JsonResponse({'error': 'No text provided'}, status=400)
 
-        # 2. DB에서 인물의 목소리 ID 찾기
-        # 기본값은 'Seoyeon'(여성)으로 설정 (역사 인물 특성)
-        voice_id = 'Seoyeon'
-        
-        ssml_text = f"<speak><prosody pitch='-5%' rate='85%'>{text}</prosody></speak>"
-
-        polly_client = boto3.client('polly', region_name='ap-northeast-2')
-        
-        response = polly_client.synthesize_speech(
-            Text=ssml_text,
-            TextType='ssml',  # ← 이 부분이 중요합니다!
-            OutputFormat='mp3',
-            VoiceId=voice_id,
-            Engine='standard'
-        )
-        
         if prompt_id:
             try:
-                # DB 조회
                 person = AIPerson.objects.get(promptId=prompt_id)
                 if person.voiceId:
-                    voice_id = person.voiceId
-                logger.info(f"TTS 생성 시작 - 인물: {person.name}, 목소리: {voice_id}")
+                    voice_id = person.voiceId  # DB에 Typecast ID가 저장되어 있어야 함
+                logger.info(f"Typecast TTS 시작 - 인물: {person.name}, 목소리: {voice_id}")
             except AIPerson.DoesNotExist:
-                logger.warning(f"promptId {prompt_id}를 찾을 수 없어 기본 목소리를 사용합니다.")
+                logger.warning(f"promptId {prompt_id}를 찾을 수 없습니다.")
 
-        # 3. Amazon Polly를 통해 파일 생성
-        # VPC Endpoint가 설정되어 있다면 자동으로 내부망을 이용합니다.
-        polly_client = boto3.client(
-            service_name='polly',
-            region_name=os.getenv('CLOUD_AWS_REGION', 'ap-northeast-2')
-        )
+        # 3. Typecast API 호출
+        typecast_api_key = os.getenv('TYPECAST_API_KEY')
+        url = "https://api.typecast.ai/v1/text-to-speech"
+        
+        headers = {
+            "X-API-KEY": typecast_api_key,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "text": text,
+            "voice_id": voice_id,
+            "language": "ko",
+            "model": "ssfm-v21",
+            "output": {
+                "audio_format": "mp3"
+            },
 
-        if "AudioStream" in response:
-            # StreamingHttpResponse는 제너레이터를 인자로 받아 데이터를 조각조각 보냅니다.
-            def stream_audio():
-                with closing(response["AudioStream"]) as stream:
-                    yield from stream
+            "options": {
+                "pitch": -2
+            }
+        }
 
-            res = StreamingHttpResponse(response["AudioStream"], content_type='audio/mpeg')
+        # 음성 생성 요청
+        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=60)
+        
+        if response.status_code == 200:
+            res = StreamingHttpResponse(
+                response.iter_content(chunk_size=8192), 
+                content_type='audio/mpeg'
+            )
             res['Content-Disposition'] = f'inline; filename="response_{voice_id}.mp3"'
             return res
         else:
-            return JsonResponse({'error': 'Polly AudioStream 생성 실패'}, status=500)
+            return JsonResponse({'error': '오디오 파일 다운로드 실패'}, status=500)
 
     except Exception as e:
-        logger.error(f"Polly TTS 생성 중 예외 발생: {str(e)}")
+        logger.error(f"Typecast TTS 생성 중 예외 발생: {str(e)}")
         return JsonResponse({'error': str(e)}, status=500)
