@@ -3,7 +3,6 @@ import logging
 import os
 import boto3
 import requests
-import time
 from uuid import UUID
 from contextlib import closing
 
@@ -36,7 +35,7 @@ load_dotenv()
 @require_http_methods(["POST"])
 def prompt_view(request, promptId=None):
     """Bedrock Prompt 호출 (스트리밍) - FastAPI 로직 포팅"""
-    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON')
+    env_prompt_arn = os.getenv('AWS_BEDROCK_AI_PERSON_ARN')
     
     try:
         data = json.loads(request.body)
@@ -45,7 +44,7 @@ def prompt_view(request, promptId=None):
         prompt_id = promptId or data.get('prompt_id')
         user_query = data.get('message') or data.get('user_query')
         
-        user_id = request.GET.get("userId")
+        user_id = request.GET.get("userId") or data.get("userId")
 
         if not prompt_id or not user_query:
             return StreamingHttpResponse(
