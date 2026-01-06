@@ -4,6 +4,7 @@ from datetime import datetime
 # config/urls.py 상단에 추가
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from apps.prompt import views as prompt_views
+from apps.knowledge import views as knowledge_views
 
 def root_view(request):
     return JsonResponse({
@@ -32,6 +33,8 @@ urlpatterns = [
     
     # === TTS ===
     path('api/prompt/speak/', prompt_views.tts_view, name='tts_view'),
+    path('api/knowledge/speak/', knowledge_views.chatbot_tts_view, name='chatbot_tts_view'),
+
     
     # === Swagger ===
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
