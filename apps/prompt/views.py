@@ -373,25 +373,59 @@ class TTSSerializer(serializers.Serializer):
 def tts_view(request):
     """Bedrock의 최종 응답을 음성으로 변환"""
     try:
+        logger.info("=" * 50)
+        logger.info("🎤 TTS 요청 시작")
+        logger.info("=" * 50)
+        
         # 1. 요청 데이터 파싱 
+        logger.info("📝 Step 1: 요청 데이터 파싱 중...")
         text = request.data.get('text', '')
         prompt_id = request.data.get('promptId')
         
+        logger.info(f"   - text 길이: {len(text)} 문자")
+        logger.info(f"   - text 미리보기: {text[:100]}..." if len(text) > 100 else f"   - text: {text}")
+        logger.info(f"   - promptId: {prompt_id}")
+        
         if not text:
+            logger.error("❌ 텍스트가 제공되지 않음")
             return JsonResponse({'error': 'No text provided'}, status=400)
 
+        # 2. 인물 정보 조회
+        logger.info("👤 Step 2: 인물 정보 조회 중...")
+        voice_id = None  # 기본값 설정
+        
         if prompt_id:
             try:
                 person = AIPerson.objects.get(promptId=prompt_id)
+                logger.info(f"   ✅ 인물 찾음: {person.name}")
+                
                 if person.voiceId:
-                    voice_id = person.voiceId  # DB에 Typecast ID가 저장되어 있어야 함
-                logger.info(f"Typecast TTS 시작 - 인물: {person.name}, 목소리: {voice_id}")
+                    voice_id = person.voiceId
+                    logger.info(f"   ✅ 목소리 ID: {voice_id}")
+                else:
+                    logger.warning(f"   ⚠️  인물 {person.name}에 voiceId가 없음")
+                    
             except AIPerson.DoesNotExist:
-                logger.warning(f"promptId {prompt_id}를 찾을 수 없습니다.")
+                logger.warning(f"   ⚠️  promptId {prompt_id}를 찾을 수 없습니다.")
+        else:
+            logger.warning("   ⚠️  promptId가 제공되지 않음")
 
-        # 3. Typecast API 호출
+        if not voice_id:
+            logger.error("❌ voice_id를 확인할 수 없습니다.")
+            return JsonResponse({'error': 'voice_id not found'}, status=400)
+
+        # 3. Typecast API 준비
+        logger.info("🔧 Step 3: Typecast API 준비 중...")
         typecast_api_key = os.getenv('TYPECAST_API_KEY')
+        
+        if not typecast_api_key:
+            logger.error("❌ TYPECAST_API_KEY 환경 변수가 설정되지 않음")
+            return JsonResponse({'error': 'TYPECAST_API_KEY not configured'}, status=500)
+        
+        logger.info(f"   ✅ API 키 확인됨: {typecast_api_key[:10]}...")
+        
         url = "https://api.typecast.ai/v1/text-to-speech"
+        logger.info(f"   - API URL: {url}")
         
         headers = {
             "X-API-KEY": typecast_api_key,
@@ -406,25 +440,96 @@ def tts_view(request):
             "output": {
                 "audio_format": "mp3"
             },
-
             "options": {
                 "pitch": -2
             }
         }
+        
+        logger.info("   - Payload 생성 완료:")
+        logger.info(f"     * voice_id: {payload['voice_id']}")
+        logger.info(f"     * language: {payload['language']}")
+        logger.info(f"     * model: {payload['model']}")
+        logger.info(f"     * audio_format: {payload['output']['audio_format']}")
+        logger.info(f"     * pitch: {payload['options']['pitch']}")
 
-        # 음성 생성 요청
-        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=60)
+        # 4. Typecast API 호출
+        logger.info("🌐 Step 4: Typecast API 호출 중...")
+        logger.info(f"   - 타임아웃: 60초")
+        
+        try:
+            response = requests.post(
+                url, 
+                json=payload, 
+                headers=headers, 
+                stream=True, 
+                timeout=60
+            )
+            
+            logger.info(f"   ✅ API 응답 수신: HTTP {response.status_code}")
+            logger.info(f"   - Response Headers: {dict(response.headers)}")
+            
+        except requests.exceptions.Timeout:
+            logger.error("❌ API 호출 타임아웃 (60초 초과)")
+            return JsonResponse({'error': 'Typecast API timeout'}, status=504)
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"❌ API 연결 실패: {str(e)}")
+            return JsonResponse({'error': 'Cannot connect to Typecast API'}, status=503)
+        except Exception as e:
+            logger.error(f"❌ API 호출 중 예외 발생: {str(e)}")
+            return JsonResponse({'error': f'API request failed: {str(e)}'}, status=500)
+        
+        # 5. 응답 처리
+        logger.info("📦 Step 5: 응답 처리 중...")
         
         if response.status_code == 200:
+            logger.info("   ✅ 음성 생성 성공!")
+            
+            # Content-Length 확인
+            content_length = response.headers.get('Content-Length')
+            if content_length:
+                logger.info(f"   - 오디오 파일 크기: {int(content_length) / 1024:.2f} KB")
+            
             res = StreamingHttpResponse(
                 response.iter_content(chunk_size=8192), 
                 content_type='audio/mpeg'
             )
             res['Content-Disposition'] = f'inline; filename="response_{voice_id}.mp3"'
+            
+            logger.info(f"   - 파일명: response_{voice_id}.mp3")
+            logger.info("=" * 50)
+            logger.info("✅ TTS 요청 완료 - 스트리밍 시작")
+            logger.info("=" * 50)
+            
             return res
+            
         else:
-            return JsonResponse({'error': '오디오 파일 다운로드 실패'}, status=500)
+            logger.error(f"❌ API 응답 에러: HTTP {response.status_code}")
+            
+            # 에러 응답 본문 확인
+            try:
+                error_body = response.json()
+                logger.error(f"   - 에러 내용: {error_body}")
+            except:
+                error_text = response.text[:500]
+                logger.error(f"   - 에러 텍스트: {error_text}")
+            
+            return JsonResponse({
+                'error': '오디오 파일 생성 실패',
+                'status_code': response.status_code,
+                'detail': response.text[:200]
+            }, status=500)
 
     except Exception as e:
-        logger.error(f"Typecast TTS 생성 중 예외 발생: {str(e)}")
-        return JsonResponse({'error': str(e)}, status=500)
+        logger.error("=" * 50)
+        logger.error(f"❌ TTS 생성 중 예외 발생")
+        logger.error(f"   - 에러 타입: {type(e).__name__}")
+        logger.error(f"   - 에러 메시지: {str(e)}")
+        logger.error("=" * 50)
+        
+        import traceback
+        logger.error(f"스택 트레이스:\n{traceback.format_exc()}")
+        
+        return JsonResponse({
+            'error': str(e),
+            'error_type': type(e).__name__
+        }, status=500)
