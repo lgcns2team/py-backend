@@ -54,32 +54,71 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Database
 DATABASES = {
     'default': {
-        # 'ENGINE': 'django.db.backends.sqlite3',
-        # 'NAME': BASE_DIR / 'db.sqlite3',
-        # 'ENGINE': 'django.db.backends.postgresql',
-        # 'NAME': os.getenv('DB_NAME', 'ai_db'),
-        # 'USER': os.getenv('DB_USER', 'postgres'),
-        # 'PASSWORD': os.getenv('DB_PASSWORD', ''),
-        # 'HOST': os.getenv('DB_HOST', 'localhost'),
-        # 'PORT': os.getenv('DB_PORT', '5432'),
-        
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('DB_NAME', 'HAI'),
         'USER': os.getenv('DB_USER', 'postgres'),
         'PASSWORD': os.getenv('DB_PASSWORD', 'root'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
-         'OPTIONS': {
+        'OPTIONS': {
             'client_encoding': 'UTF8',
         },
     }
 }
 
-# Redis
+# Environment
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'local')
+
+# Redis Configuration
+REDIS_URL = os.getenv('REDIS_URL')
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_URL = os.getenv("REDIS_URL")
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
+REDIS_SSL = os.getenv('REDIS_SSL', 'false').lower() in ('true', '1', 'yes')
+
+# Django Cache 설정
+if REDIS_URL:
+    # REDIS_URL이 있으면 우선 사용 (프로덕션)
+    from urllib.parse import urlparse
+    url = urlparse(REDIS_URL)
+    is_ssl = url.scheme == 'rediss'
+    
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'SOCKET_CONNECT_TIMEOUT': 5,
+                'SOCKET_TIMEOUT': 5,
+                'RETRY_ON_TIMEOUT': True,
+                'CONNECTION_POOL_KWARGS': {
+                    'ssl_cert_reqs': None if is_ssl else None,
+                } if is_ssl else {}
+            }
+        }
+    }
+else:
+    # REDIS_URL이 없으면 개별 설정 사용 (로컬)
+    redis_scheme = 'rediss' if REDIS_SSL else 'redis'
+    redis_location = f'{redis_scheme}://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+    
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': redis_location,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'SOCKET_CONNECT_TIMEOUT': 5,
+                'SOCKET_TIMEOUT': 5,
+                'RETRY_ON_TIMEOUT': True,
+            }
+        }
+    }
+
+# Session 설정 (선택사항)
+# SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+# SESSION_CACHE_ALIAS = 'default'
 
 # AWS Bedrock
 AWS_REGION = os.getenv('AWS_REGION', 'ap-northeast-2')
@@ -120,17 +159,5 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
     ],
     'UNAUTHENTICATED_USER': None,
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema', # 추가
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
-
-# CACHES = {
-#     "default": {
-#         "BACKEND": "django_redis.cache.RedisCache",
-#         "LOCATION": REDIS_URL,
-#         "OPTIONS": {
-#             "ssl_cert_reqs": None,   # ElastiCache 기본
-#             "socket_connect_timeout": 5,
-#             "socket_timeout": 5,
-#         },
-#     }
-# }
