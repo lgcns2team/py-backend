@@ -77,10 +77,7 @@ DATABASES = {
 
 # Redis
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-# REDIS_URL = os.getenv(
-#     "REDIS_URL",
-#     "rediss://master.history-ai-prod-redis.otoer0.apn2.cache.amazonaws.com:6379/0"
-# )
+REDIS_URL = os.getenv("REDIS_URL")
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
