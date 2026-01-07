@@ -76,11 +76,11 @@ DATABASES = {
 }
 
 # Redis
-# REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_URL = os.getenv(
-    "REDIS_URL",
-    "rediss://master.history-ai-prod-redis.otoer0.apn2.cache.amazonaws.com:6379/0"
-)
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+# REDIS_URL = os.getenv(
+#     "REDIS_URL",
+#     "rediss://master.history-ai-prod-redis.otoer0.apn2.cache.amazonaws.com:6379/0"
+# )
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
@@ -126,14 +126,14 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema', # 추가
 }
 
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {
-            "ssl_cert_reqs": None,   # ElastiCache 기본
-            "socket_connect_timeout": 5,
-            "socket_timeout": 5,
-        },
-    }
-}
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django_redis.cache.RedisCache",
+#         "LOCATION": REDIS_URL,
+#         "OPTIONS": {
+#             "ssl_cert_reqs": None,   # ElastiCache 기본
+#             "socket_connect_timeout": 5,
+#             "socket_timeout": 5,
+#         },
+#     }
+# }
