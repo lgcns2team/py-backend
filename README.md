@@ -17,10 +17,10 @@
 
 ## (1) 프로젝트 구성 안내
 
-### 📋 프로젝트 개요
+### 프로젝트 개요
 H.AI는 AWS Bedrock을 활용한 역사 교육 AI 플랫폼의 백엔드 시스템입니다. 교과서 기반 RAG(Retrieval-Augmented Generation)와 AI Agent 기능을 통해 학생들에게 인터랙티브한 역사 학습 경험을 제공합니다.
 
-### 🛠 기술 스택
+### 기술 스택
 
 #### Core Framework
 - **Python** 3.11
@@ -43,7 +43,7 @@ H.AI는 AWS Bedrock을 활용한 역사 교육 AI 플랫폼의 백엔드 시스�
 - **AWS** (EC2, S3, Bedrock, Knowledge Bases)
 - **Docker** & **Docker Compose**
 
-### 📁 프로젝트 구조
+### 프로젝트 구조
 ```
 ├── apps
 │   ├── __init__.py
@@ -113,7 +113,7 @@ H.AI는 AWS Bedrock을 활용한 역사 교육 AI 플랫폼의 백엔드 시스�
 └── requirements.txt
 ```
 
-### 🎯 주요 특징
+### 주요 특징
 - **프롬프트 중앙 관리**: 모든 AI 서비스의 프롬프트를 체계적으로 관리
 - **다양한 통신 방식**: 동기/비동기 처리 및 SSE 스트리밍 지원
 - **교과서 기반 RAG**: AWS Knowledge Bases를 활용한 정확한 역사 정보 제공
@@ -123,13 +123,13 @@ H.AI는 AWS Bedrock을 활용한 역사 교육 AI 플랫폼의 백엔드 시스�
 
 ## (2) 프로젝트 설치하는 방법
 
-### 📋 사전 요구사항
+### 사전 요구사항
 - Python 3.11 이상
 - PostgreSQL 15 이상
 - AWS 계정 및 Bedrock 액세스 권한
 - Docker & Docker Compose (선택사항)
 
-### 🔧 설치 단계
+### 설치 단계
 
 #### 1. 저장소 클론
 ```bash
@@ -226,7 +226,7 @@ python manage.py runserver
 
 ## (3) 프로젝트 사용법
 
-### 🚀 API 엔드포인트
+### API 엔드포인트
 
 #### 1. 토론 서비스 (동기 방식)
 
@@ -342,7 +342,7 @@ event: done
 data: {}
 ```
 
-### 🔧 사용 가능한 Tool Calling 기능
+### 사용 가능한 Tool Calling 기능
 
 1. **역사 인물 페이지 이동 (navigate_to_person)**
    - 역사 인물과 대화하는 페이지로 사용자를 이동
@@ -352,7 +352,7 @@ data: {}
    - 특정 전쟁에 대해 묻거나 설명을 요청할 때 지도에서 해당 시점과 위치로 이동
    - 예: "임진왜란에 대해 알려줘", "6.25 전쟁은 언제 일어났어?"
 
-### 📱 Django Admin 사용
+### Django Admin 사용
 
 Admin 페이지 접속: `http://localhost:8000/admin/`
 
@@ -365,7 +365,7 @@ Admin 페이지 접속: `http://localhost:8000/admin/`
 
 ## (4) 프로젝트 기능 설명
 
-### 🎓 1. 토론 주제 추천 서비스
+### 1. 토론 주제 추천 서비스
 **기술:** AWS Bedrock (Claude), 동기 방식
 
 학생의 학년, 과목, 관심사를 분석하여 교육과정에 맞는 토론 주제를 추천합니다.
@@ -376,7 +376,7 @@ Admin 페이지 접속: `http://localhost:8000/admin/`
 - 학습 목표 매칭
 - 다양한 관점 제시
 
-### 📝 2. 토론 요약 서비스
+### 2. 토론 요약 서비스
 **기술:** AWS Bedrock (Claude), 동기 방식
 
 진행된 토론 내용을 분석하여 핵심 논점과 결론을 요약합니다.
@@ -387,7 +387,7 @@ Admin 페이지 접속: `http://localhost:8000/admin/`
 - 합의점 및 차이점 분석
 - 추가 학습 방향 제안
 
-### 💬 3. AI-Person 채팅 서비스
+### 3. AI-Person 채팅 서비스
 **기술:** AWS Bedrock (Claude), SSE 스트리밍
 
 역사적 인물의 페르소나를 가진 AI와 실시간 대화가 가능합니다.
@@ -402,7 +402,7 @@ Admin 페이지 접속: `http://localhost:8000/admin/`
 - 세종대왕, 이순신, 유관순, 김구 등
 - 각 인물의 시대적 배경과 가치관 반영
 
-### 🤖 4. RAG 기반 AI 챗봇 (핵심 기능)
+### 4. RAG 기반 AI 챗봇 (핵심 기능)
 **기술:** AWS Knowledge Bases, SSE 스트리밍, AI Agent, Tool Calling
 
 교과서 기반 RAG 시스템으로 정확한 역사 정보를 제공하며, Tool Calling을 통한 인터랙티브 기능을 지원합니다.
@@ -453,11 +453,11 @@ Admin 페이지 접속: `http://localhost:8000/admin/`
 }
 ```
 
-### 🎯 프롬프트 관리 시스템
+### 프롬프트 관리 시스템
 
 모든 AI 서비스의 프롬프트를 AWS BEDROCK 프롬프트 관리 기능을 통해 체계적으로 관리합니다.
 
-### 📊 데이터 흐름
+### 데이터 흐름
 
 ```
 Client Request
@@ -486,7 +486,7 @@ Service Layer
 
 ## (5) 저작권 및 사용권 정보
 
-### 📄 라이선스
+### 라이선스
 이 프로젝트는 [MIT License](LICENSE) 하에 배포됩니다.
 
 ```
@@ -505,7 +505,7 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 ```
 
-### 📚 사용된 오픈소스
+### 사용된 오픈소스
 
 | 라이브러리 | 버전 | 라이선스 |
 |----------|------|---------|
@@ -514,7 +514,7 @@ copies or substantial portions of the Software.
 | boto3 | 1.35+ | Apache 2.0 |
 | psycopg2-binary | 2.9+ | LGPL |
 
-### ⚠️ 주의사항
+### 주의사항
 - AWS Bedrock 사용에 따른 비용이 발생합니다
 - 교과서 콘텐츠 저작권은 각 출판사에 있습니다
 - 상업적 사용 시 별도 라이선스 계약이 필요할 수 있습니다
@@ -523,7 +523,7 @@ copies or substantial portions of the Software.
 
 ## (6) 버그
 
-### 🐛 알려진 이슈
+### 알려진 이슈
 
 #### 1. AI 인물과의 대화 시 할루시네이션 발생
 - **문제**: AI 인물과의 대화 시 할루시네이션 발생
@@ -561,7 +561,7 @@ copies or substantial portions of the Software.
   - AWS 인프라 구축
   - CI/CD 파이프라인 관리
 
-### 🙏 기여자
+### 기여자
 
 이 프로젝트에 기여해주신 모든 분들께 감사드립니다:
 
@@ -569,7 +569,7 @@ copies or substantial portions of the Software.
 - **[Contributor 2]** - 문서화 작업
 - **[Contributor 3]** - 버그 수정 및 테스트
 
-### 🤝 기여 방법
+### 기여 방법
 
 프로젝트에 기여하고 싶으신 분은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고해주세요.
 
@@ -579,7 +579,7 @@ copies or substantial portions of the Software.
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-### 💬 연락처
+### 연락처
 - 프로젝트 문의: hai-team@example.com
 - 기술 지원: support@hai-project.com
 - 슬랙 채널: [#hai-backend](https://your-slack.slack.com)
@@ -588,23 +588,23 @@ copies or substantial portions of the Software.
 
 ## (8) 버전 (업데이트 소식)
 
-### 📌 v2.0.0 (2024-01-08) - Current
+### v2.0.0 (2024-01-08) - Current
 **Major Update: AI Agent & Tool Calling**
 
-#### ✨ 새로운 기능
+#### 새로운 기능
 - AI Agent 기반 Tool Calling 시스템 구축
 - 연도 이동 기능 추가
 - 교과서 페이지 이동 기능 추가
 - 인물 대화창 전환 기능 추가
 - Knowledge Bases RAG 성능 개선
 
-#### 🔧 개선사항
+#### 개선사항
 - SSE 스트리밍 안정성 향상
 - 프롬프트 관리 시스템 고도화
 - API 응답 속도 30% 개선
 - 에러 핸들링 강화
 
-#### 🐛 버그 수정
+#### 버그 수정
 - SSE 연결 타임아웃 문제 해결
 - 중복 Tool 호출 방지 로직 추가
 - 메모리 누수 이슈 수정
@@ -612,31 +612,31 @@ copies or substantial portions of the Software.
 ### v1.5.0 (2023-12-15)
 **Feature: RAG 기반 챗봇**
 
-#### ✨ 새로운 기능
+#### 새로운 기능
 - AWS Knowledge Bases 통합
 - 교과서 기반 RAG 시스템 구축
 - SSE 스트리밍 챗봇 서비스
 
-#### 🔧 개선사항
+#### 개선사항
 - Vector Search 정확도 향상
 - 컨텍스트 윈도우 최적화
 
 ### v1.0.0 (2023-11-01)
 **Initial Release**
 
-#### ✨ 핵심 기능
+#### 핵심 기능
 - AWS Bedrock 연동
 - 토론 주제 추천 서비스
 - 토론 요약 서비스
 - AI-Person 채팅 서비스 (SSE)
 - 프롬프트 관리 시스템
 
-#### 🏗️ 인프라
+#### 인프라
 - Django + DRF 기반 API 서버
 - PostgreSQL 데이터베이스
 - Docker 컨테이너화
 
-### 🔮 로드맵 (Upcoming)
+### 로드맵 (Upcoming)
 
 #### v2.1.0 (2024 Q1)
 - [ ] 멀티모달 지원 (이미지, 영상)
@@ -660,7 +660,7 @@ copies or substantial portions of the Software.
 
 ## (9) FAQ
 
-### ❓ 자주 묻는 질문
+### 자주 묻는 질문
 
 #### Q1. 로컬 개발 환경에서 AWS 연동은 어떻게 하나요?
 **A:** AWS CLI 설정 후 로컬 프로필 사용:
