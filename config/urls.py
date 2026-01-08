@@ -27,9 +27,6 @@ urlpatterns = [
     path('api/', include('apps.prompt.urls')),  # /api/character/... 매칭
     path('api/agent-chat', include('apps.router.urls')),
     path('api/debate/', include('apps.debate.urls')),
-
-    # === Knowledge (일반 AI 채팅) ===
-    path('chat', include('apps.knowledge.urls')),
     
     # === TTS ===
     path('api/prompt/speak/', prompt_views.tts_view, name='tts_view'),

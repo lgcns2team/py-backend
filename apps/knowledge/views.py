@@ -128,7 +128,7 @@ def chatbot_tts_view(request):
             "output": {"audio_format": "mp3"}
         }
 
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers,stream=True, timeout=60)
         
         if response.status_code == 200:
             return StreamingHttpResponse(
